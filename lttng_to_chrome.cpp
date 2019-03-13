@@ -213,7 +213,7 @@ struct Event
     uint64_t cpuId = 0;
     int64_t tid = -1;
     int64_t pid = -1;
-    char type = 'X';
+    char type = 'i';
 };
 
 void Context::parseEvent(bt_ctf_event* ctf_event)
