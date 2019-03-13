@@ -116,8 +116,14 @@ struct Context
     {
         tidToPid[tid] = pid;
 
-        printEvent(R"({"name": "%s", "ph": "M", "ts": %ld, "pid": %ld, "tid": %ld, "args": {"name": "%s"}})",
-                   tid == pid ? "process_name" : "thread_name", timestamp, pid, tid, name.data());
+        auto printName = [this, tid, pid, name, timestamp](const char *type)
+        {
+            printEvent(R"({"name": "%s", "ph": "M", "ts": %ld, "pid": %ld, "tid": %ld, "args": {"name": "%s"}})",
+                       type, timestamp, pid, tid, name.data());
+        };
+        if (tid == pid)
+            printName("process_name");
+        printName("thread_name");
     }
 
     template<typename ...T>
