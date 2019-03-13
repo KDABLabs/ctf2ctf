@@ -39,6 +39,13 @@ auto wrap(T* value, Cleanup cleanup)
     return std::unique_ptr<T, Cleanup>(value, cleanup);
 }
 
+void convert(bt_ctf_event *event)
+{
+    const auto name = bt_ctf_event_name(event);
+    const auto timestamp = bt_ctf_get_timestamp(event);
+    printf("{\"name\": \"%s\", \"ts\": %lu}", name, timestamp);
+}
+
 int main(int argc, char **argv)
 {
     if (argc != 2) {
@@ -53,6 +60,31 @@ int main(int argc, char **argv)
         fprintf(stderr, "failed to open trace: %s (note: we don't recursively look for traces!)\n", argv[1]);
         return 1;
     }
+
+    auto iter = wrap(bt_ctf_iter_create(ctx.get(), nullptr, nullptr), bt_ctf_iter_destroy);
+    if (!iter) {
+        fprintf(stderr, "failed to create iterator\n");
+        return 1;
+    }
+
+    printf("{\n  \"displayTimeUnit\": \"ns\",  \"traceEvents\": [");
+
+    bool firstEvent = true;
+    do {
+        auto ctf_event = bt_ctf_iter_read_event(iter.get());
+        if (!ctf_event)
+            break;
+
+        if (!firstEvent)
+            printf(",");
+        printf("\n    ");
+
+        convert(ctf_event);
+        firstEvent = false;
+
+    } while (bt_iter_next(bt_ctf_get_iter(iter.get())) == 0);
+
+    printf("\n  ]\n}\n");
 
     return 0;
 }
