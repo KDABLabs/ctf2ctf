@@ -64,6 +64,11 @@ auto get_int64(const bt_ctf_event *event, const bt_definition *scope, const char
     return get(event, scope, name, bt_ctf_get_int64);
 }
 
+auto get_char_array(const bt_ctf_event *event, const bt_definition *scope, const char* name)
+{
+    return get(event, scope, name, bt_ctf_get_char_array);
+}
+
 struct Context
 {
     Context()
@@ -92,14 +97,32 @@ struct Context
         cpuToTid[cpuId] = tid;
     }
 
-    void setPid(int64_t tid, int64_t pid)
+    void setPid(int64_t tid, int64_t pid, std::string_view name, int64_t timestamp)
     {
         tidToPid[tid] = pid;
+
+        printEvent(R"({"name": "%s", "ph": "M", "ts": %ld, "pid": %ld, "tid": %ld, "args": {"name": "%s"}})",
+                   tid == pid ? "process_name" : "thread_name", timestamp, pid, tid, name.data());
     }
+
+    template<typename ...T>
+    void printEvent(const char* fmt, T... args)
+    {
+        if (!firstEvent)
+            printf(",");
+        firstEvent = false;
+
+        printf("\n    ");
+
+        printf(fmt, args...);
+    }
+
+    void parseEvent(bt_ctf_event *event);
 
 private:
     std::vector<int64_t> cpuToTid;
     std::unordered_map<int64_t, int64_t> tidToPid;
+    bool firstEvent = true;
 };
 
 struct Event
@@ -127,17 +150,14 @@ struct Event
         } else if (name == "sched_process_fork") {
             const auto child_tid = get_int64(event, event_fields_scope, "child_tid").value();
             const auto child_pid = get_int64(event, event_fields_scope, "child_pid").value();
-            context->setPid(child_tid, child_pid);
+            const auto child_comm = get_char_array(event, event_fields_scope, "child_comm").value();
+            context->setPid(child_tid, child_pid, child_comm, timestamp);
         } else if (name == "lttng_statedump_process_state") {
             const auto vtid = get_int64(event, event_fields_scope, "vtid").value();
             const auto vpid = get_int64(event, event_fields_scope, "vpid").value();
-            context->setPid(vtid, vpid);
+            const auto name = get_char_array(event, event_fields_scope, "name").value();
+            context->setPid(vtid, vpid, name, timestamp);
         }
-    }
-
-    void print() const
-    {
-        printf("{\"name\": \"%s\", \"ts\": %lu, \"pid\": %ld, \"tid\": %ld}", name.data(), timestamp, pid, tid);
     }
 
     std::string_view name;
@@ -146,6 +166,14 @@ struct Event
     int64_t tid = -1;
     int64_t pid = -1;
 };
+
+void Context::parseEvent(bt_ctf_event* ctf_event)
+{
+    Event event(ctf_event, this);
+    printEvent(R"({"name": "%s", "ph": "X", "ts": %lu, "pid": %ld, "tid": %ld})",
+               event.name.data(), event.timestamp, event.pid, event.tid);
+}
+
 
 int main(int argc, char **argv)
 {
@@ -171,21 +199,13 @@ int main(int argc, char **argv)
     printf("{\n  \"displayTimeUnit\": \"ns\",  \"traceEvents\": [");
 
     Context context;
-    bool firstEvent = true;
     do {
         auto ctf_event = bt_ctf_iter_read_event(iter.get());
         if (!ctf_event)
             break;
 
         try {
-            Event event(ctf_event, &context);
-
-            if (!firstEvent)
-                printf(",");
-            printf("\n    ");
-
-            event.print();
-            firstEvent = false;
+            context.parseEvent(ctf_event);
         } catch(const std::exception &exception) {
             fprintf(stderr, "Failed to parse event: %s\n", exception.what());
         }
