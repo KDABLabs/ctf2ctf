@@ -69,6 +69,11 @@ auto get_char_array(const bt_ctf_event *event, const bt_definition *scope, const
     return get(event, scope, name, bt_ctf_get_char_array);
 }
 
+auto get_string(const bt_ctf_event *event, const bt_definition *scope, const char* name)
+{
+    return get(event, scope, name, bt_ctf_get_string);
+}
+
 bool startsWith(std::string_view string, std::string_view prefix)
 {
     return string.size() >= prefix.size() && std::equal(prefix.begin(), prefix.end(), string.begin());
@@ -167,6 +172,13 @@ struct Event
             const auto vpid = get_int64(event, event_fields_scope, "vpid").value();
             const auto name = get_char_array(event, event_fields_scope, "name").value();
             context->setPid(vtid, vpid, name, timestamp);
+        } else if (name == "sched_process_exec") {
+            const auto tid = get_int64(event, event_fields_scope, "tid").value();
+            auto filename = std::string_view(get_string(event, event_fields_scope, "filename").value());
+            auto it = filename.find_last_of('/');
+            if (it != filename.npos)
+                filename.remove_prefix(it + 1);
+            context->setPid(tid, context->pid(tid), filename, timestamp);
         }
 
         auto removeSuffix = [this](std::string_view suffix)
