@@ -31,6 +31,11 @@
 
 #include <memory>
 #include <type_traits>
+#include <string>
+#include <vector>
+#include <unordered_map>
+#include <string_view>
+#include <optional>
 #include <cstdio>
 
 template<typename T, typename Cleanup>
@@ -39,12 +44,108 @@ auto wrap(T* value, Cleanup cleanup)
     return std::unique_ptr<T, Cleanup>(value, cleanup);
 }
 
-void convert(bt_ctf_event *event)
+template<typename Reader>
+auto get(const bt_ctf_event *event, const bt_definition *scope, const char* name, Reader reader)
 {
-    const auto name = bt_ctf_event_name(event);
-    const auto timestamp = bt_ctf_get_timestamp(event);
-    printf("{\"name\": \"%s\", \"ts\": %lu}", name, timestamp);
+    auto definition = bt_ctf_get_field(event, scope, name);
+    auto ret = std::optional<std::invoke_result_t<Reader, decltype(definition)>>();
+    if (definition)
+        ret = std::make_optional(reader(definition));
+    return ret;
 }
+
+auto get_uint64(const bt_ctf_event *event, const bt_definition *scope, const char* name)
+{
+    return get(event, scope, name, bt_ctf_get_uint64);
+}
+
+auto get_int64(const bt_ctf_event *event, const bt_definition *scope, const char* name)
+{
+    return get(event, scope, name, bt_ctf_get_int64);
+}
+
+struct Context
+{
+    Context()
+    {
+        cpuToTid.reserve(32);
+        tidToPid.reserve(1024);
+    }
+
+    int64_t tid(uint64_t cpuId) const
+    {
+        if (cpuToTid.size() <= cpuId)
+            return -1;
+        return cpuToTid[cpuId];
+    }
+
+    int64_t pid(int64_t tid) const
+    {
+        auto it = tidToPid.find(tid);
+        return it == tidToPid.end() ? -1 : it->second;
+    }
+
+    void setTid(uint64_t cpuId, int64_t tid)
+    {
+        if (cpuToTid.size() <= cpuId)
+            cpuToTid.resize(cpuId + 1);
+        cpuToTid[cpuId] = tid;
+    }
+
+    void setPid(int64_t tid, int64_t pid)
+    {
+        tidToPid[tid] = pid;
+    }
+
+private:
+    std::vector<int64_t> cpuToTid;
+    std::unordered_map<int64_t, int64_t> tidToPid;
+};
+
+struct Event
+{
+    Event(bt_ctf_event *event, Context *context)
+        : name(bt_ctf_event_name(event))
+        , timestamp(bt_ctf_get_timestamp(event))
+    {
+        auto stream_packet_context_scope = bt_ctf_get_top_level_scope(event, BT_STREAM_PACKET_CONTEXT);
+        if (!stream_packet_context_scope)
+            fprintf(stderr, "failed to get stream packet context scope\n");
+
+        cpuId = get_uint64(event, stream_packet_context_scope, "cpu_id").value();
+
+        tid = context->tid(cpuId);
+        pid = context->pid(tid);
+
+        auto event_fields_scope = bt_ctf_get_top_level_scope(event, BT_EVENT_FIELDS);
+        if (!event_fields_scope)
+            fprintf(stderr, "failed to get event fields scope\n");
+
+        if (name == "sched_switch") {
+            const auto next_tid = get_int64(event, event_fields_scope, "next_tid").value();
+            context->setTid(cpuId, next_tid);
+        } else if (name == "sched_process_fork") {
+            const auto child_tid = get_int64(event, event_fields_scope, "child_tid").value();
+            const auto child_pid = get_int64(event, event_fields_scope, "child_pid").value();
+            context->setPid(child_tid, child_pid);
+        } else if (name == "lttng_statedump_process_state") {
+            const auto vtid = get_int64(event, event_fields_scope, "vtid").value();
+            const auto vpid = get_int64(event, event_fields_scope, "vpid").value();
+            context->setPid(vtid, vpid);
+        }
+    }
+
+    void print() const
+    {
+        printf("{\"name\": \"%s\", \"ts\": %lu, \"pid\": %ld, \"tid\": %ld}", name.data(), timestamp, pid, tid);
+    }
+
+    std::string_view name;
+    int64_t timestamp = 0;
+    uint64_t cpuId = 0;
+    int64_t tid = -1;
+    int64_t pid = -1;
+};
 
 int main(int argc, char **argv)
 {
@@ -69,19 +170,25 @@ int main(int argc, char **argv)
 
     printf("{\n  \"displayTimeUnit\": \"ns\",  \"traceEvents\": [");
 
+    Context context;
     bool firstEvent = true;
     do {
         auto ctf_event = bt_ctf_iter_read_event(iter.get());
         if (!ctf_event)
             break;
 
-        if (!firstEvent)
-            printf(",");
-        printf("\n    ");
+        try {
+            Event event(ctf_event, &context);
 
-        convert(ctf_event);
-        firstEvent = false;
+            if (!firstEvent)
+                printf(",");
+            printf("\n    ");
 
+            event.print();
+            firstEvent = false;
+        } catch(const std::exception &exception) {
+            fprintf(stderr, "Failed to parse event: %s\n", exception.what());
+        }
     } while (bt_iter_next(bt_ctf_get_iter(iter.get())) == 0);
 
     printf("\n  ]\n}\n");
