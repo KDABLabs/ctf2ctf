@@ -69,6 +69,16 @@ auto get_char_array(const bt_ctf_event *event, const bt_definition *scope, const
     return get(event, scope, name, bt_ctf_get_char_array);
 }
 
+bool startsWith(std::string_view string, std::string_view prefix)
+{
+    return string.size() >= prefix.size() && std::equal(prefix.begin(), prefix.end(), string.begin());
+}
+
+bool endsWith(std::string_view string, std::string_view suffix)
+{
+    return string.size() >= suffix.size() && std::equal(suffix.rbegin(), suffix.rend(), string.rbegin());
+}
+
 struct Context
 {
     Context()
@@ -158,20 +168,47 @@ struct Event
             const auto name = get_char_array(event, event_fields_scope, "name").value();
             context->setPid(vtid, vpid, name, timestamp);
         }
+
+        auto removeSuffix = [this](std::string_view suffix)
+        {
+            if (!endsWith(name, suffix))
+                return false;
+            name.remove_suffix(suffix.length());
+            return true;
+        };
+
+        auto rewriteName = [this](std::string_view prefix, std::string_view replacement)
+        {
+            if (!startsWith(name, prefix))
+                return false;
+
+            mutatedName = replacement;
+            mutatedName += name.substr(prefix.size());
+            name = mutatedName;
+            return true;
+        };
+
+        if (removeSuffix("_entry") || rewriteName("syscall_entry_", "syscall_"))
+            type = 'B';
+        else if (removeSuffix("_exit") || rewriteName("syscall_exit_", "syscall_"))
+            type = 'E';
     }
 
     std::string_view name;
+    // when we rewrite the name, this is the source for the string_view
+    std::string mutatedName;
     int64_t timestamp = 0;
     uint64_t cpuId = 0;
     int64_t tid = -1;
     int64_t pid = -1;
+    char type = 'X';
 };
 
 void Context::parseEvent(bt_ctf_event* ctf_event)
 {
     Event event(ctf_event, this);
-    printEvent(R"({"name": "%s", "ph": "X", "ts": %lu, "pid": %ld, "tid": %ld})",
-               event.name.data(), event.timestamp, event.pid, event.tid);
+    printEvent(R"({"name": "%s", "ph": "%c", "ts": %lu, "pid": %ld, "tid": %ld})",
+               event.name.data(), event.type, event.timestamp, event.pid, event.tid);
 }
 
 
