@@ -31,6 +31,7 @@
 
 #include <memory>
 #include <type_traits>
+#include <cstdio>
 
 template<typename T, typename Cleanup>
 auto wrap(T* value, Cleanup cleanup)
@@ -40,6 +41,18 @@ auto wrap(T* value, Cleanup cleanup)
 
 int main(int argc, char **argv)
 {
+    if (argc != 2) {
+        fprintf(stderr, "ERROR: missing path to CTF trace\n"
+                        "USAGE: lttng_to_chrome path/to/lttng/trace/folder\n");
+        return 1;
+    }
     auto ctx = wrap(bt_context_create(), bt_context_put);
+
+    auto trace_id = bt_context_add_trace(ctx.get(), argv[1], "ctf", nullptr, nullptr, nullptr);
+    if (trace_id < 0) {
+        fprintf(stderr, "failed to open trace: %s (note: we don't recursively look for traces!)\n", argv[1]);
+        return 1;
+    }
+
     return 0;
 }
