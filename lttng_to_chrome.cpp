@@ -210,11 +210,39 @@ struct Event
             type = 'B';
         else if (removeSuffix("_exit") || rewriteName("syscall_exit_", "syscall_"))
             type = 'E';
+
+        // TODO: also parse /sys/kernel/debug/tracing/available_events if accessible
+        const auto prefixes = {
+            "block"
+            "irq",
+            "kmem",
+            "lttng_statedump",
+            "power",
+            "random",
+            "rcu",
+            "sched",
+            "scsi",
+            "signal",
+            "skb",
+            "syscall",
+            "timer",
+            "workqueue",
+            "writeback",
+            "x86_exceptions_page_fault",
+            "x86_irq_vectors",
+        };
+        for (auto prefix : prefixes) {
+            if (startsWith(name, prefix)) {
+                category = prefix;
+                break;
+            }
+        }
     }
 
     std::string_view name;
     // when we rewrite the name, this is the source for the string_view
     std::string mutatedName;
+    std::string_view category;
     int64_t timestamp = 0;
     uint64_t cpuId = 0;
     int64_t tid = -1;
@@ -224,11 +252,16 @@ struct Event
 
 void Context::parseEvent(bt_ctf_event* ctf_event)
 {
-    Event event(ctf_event, this);
-    printEvent(R"({"name": "%s", "ph": "%c", "ts": %lu, "pid": %ld, "tid": %ld})",
-               event.name.data(), event.type, event.timestamp, event.pid, event.tid);
-}
+    const auto event = Event(ctf_event, this);
 
+    if (event.category.empty()) {
+        printEvent(R"({"name": "%s", "ph": "%c", "ts": %lu, "pid": %ld, "tid": %ld})",
+                event.name.data(), event.type, event.timestamp, event.pid, event.tid);
+    } else {
+        printEvent(R"({"name": "%s", "ph": "%c", "ts": %lu, "pid": %ld, "tid": %ld, "cat": "%s"})",
+                event.name.data(), event.type, event.timestamp, event.pid, event.tid, event.category.data());
+    }
+}
 
 int main(int argc, char **argv)
 {
