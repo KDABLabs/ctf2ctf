@@ -84,6 +84,34 @@ bool endsWith(std::string_view string, std::string_view suffix)
     return string.size() >= suffix.size() && std::equal(suffix.rbegin(), suffix.rend(), string.rbegin());
 }
 
+struct KMemAlloc
+{
+    uint64_t requested = 0;
+    uint64_t allocated = 0;
+};
+
+KMemAlloc operator+(const KMemAlloc &lhs, const KMemAlloc &rhs)
+{
+    return {lhs.requested + rhs.requested, lhs.allocated + rhs.allocated};
+}
+
+KMemAlloc operator-(const KMemAlloc &lhs, const KMemAlloc &rhs)
+{
+    return {lhs.requested - rhs.requested, lhs.allocated - rhs.allocated};
+}
+
+KMemAlloc& operator+=(KMemAlloc &lhs, const KMemAlloc &rhs)
+{
+    lhs = lhs + rhs;
+    return lhs;
+}
+
+KMemAlloc& operator-=(KMemAlloc &lhs, const KMemAlloc &rhs)
+{
+    lhs = lhs - rhs;
+    return lhs;
+}
+
 struct Context
 {
     Context()
@@ -140,10 +168,54 @@ struct Context
 
     void parseEvent(bt_ctf_event *event);
 
+    enum KMemType {
+        KMalloc,
+        CacheAlloc,
+    };
+    void alloc(uint64_t ptr, const KMemAlloc &alloc, int64_t timestamp, KMemType type)
+    {
+        auto &hash = type == KMalloc ? kmem : kmemCached;
+        auto &current = type == KMalloc ? currentAlloc : currentCached;
+        hash[ptr] = alloc;
+        current += alloc;
+        printCount(type, timestamp);
+    }
+
+    void free(uint64_t ptr, int64_t timestamp, KMemType type)
+    {
+        auto &hash = type == KMalloc ? kmem : kmemCached;
+        auto &current = type == KMalloc ? currentAlloc : currentCached;
+        current -= hash[ptr];
+        printCount(type, timestamp);
+    }
+
 private:
+    void printCount(KMemType type, int64_t timestamp)
+    {
+        const auto &current = type == KMalloc ? currentAlloc : currentCached;
+        printCount(type == KMalloc ? "kmem_kmalloc_requested" : "kmem_cache_alloc_requested", current.requested, timestamp);
+        printCount(type == KMalloc ? "kmem_kmalloc_allocated" : "kmem_cache_alloc_allocated", current.allocated, timestamp);
+    }
+
+    void printCount(std::string_view name, int64_t value, int64_t timestamp)
+    {
+        if (firstCount) {
+            printEvent(R"({"name": "process_sort_index", "ph": "M", "pid": 0, "tid": 0, "args": { "sort_index": -1 }})");
+            printEvent(R"({"name": "process_name", "ph": "M", "pid": 0, "tid": 0, "args": { "name": "kernel statistics" }})");
+            firstCount = false;
+        }
+        printEvent(R"({"name": "%s", "ph": "C", "ts": %lu, "pid": 0, "tid": 0, "args": {"value": %ld}})",
+                   name.data(), timestamp, value);
+    }
+
     std::vector<int64_t> cpuToTid;
     std::unordered_map<int64_t, int64_t> tidToPid;
+    std::unordered_map<uint64_t, KMemAlloc> kmem;
+    std::unordered_map<uint64_t, KMemAlloc> kmemCached;
+    KMemAlloc currentAlloc;
+    KMemAlloc currentCached;
     bool firstEvent = true;
+    bool firstCount = true;
 };
 
 struct Event
@@ -185,6 +257,15 @@ struct Event
             if (it != filename.npos)
                 filename.remove_prefix(it + 1);
             context->setPid(tid, context->pid(tid), filename, timestamp);
+        } else if (name == "kmem_kmalloc" || name == "kmem_cache_alloc") {
+            const auto ptr = get_uint64(event, event_fields_scope, "ptr").value();
+            const auto bytes_req = get_uint64(event, event_fields_scope, "bytes_req").value();
+            const auto bytes_alloc = get_uint64(event, event_fields_scope, "bytes_alloc").value();
+            context->alloc(ptr, {bytes_req, bytes_alloc}, timestamp,
+                           name == "kmem_kmalloc" ? Context::KMalloc : Context::CacheAlloc);
+        } else if (name == "kmem_kfree" || name == "kmem_cache_free") {
+            const auto ptr = get_uint64(event, event_fields_scope, "ptr").value();
+            context->free(ptr, timestamp, name == "kmem_kfree" ? Context::KMalloc : Context::CacheAlloc);
         }
 
         auto removeSuffix = [this](std::string_view suffix)
