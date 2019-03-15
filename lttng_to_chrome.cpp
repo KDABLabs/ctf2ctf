@@ -189,14 +189,6 @@ struct Context
         printCount(type, timestamp);
     }
 
-private:
-    void printCount(KMemType type, int64_t timestamp)
-    {
-        const auto &current = type == KMalloc ? currentAlloc : currentCached;
-        printCount(type == KMalloc ? "kmem_kmalloc_requested" : "kmem_cache_alloc_requested", current.requested, timestamp);
-        printCount(type == KMalloc ? "kmem_kmalloc_allocated" : "kmem_cache_alloc_allocated", current.allocated, timestamp);
-    }
-
     void printCount(std::string_view name, int64_t value, int64_t timestamp)
     {
         if (firstCount) {
@@ -206,6 +198,14 @@ private:
         }
         printEvent(R"({"name": "%s", "ph": "C", "ts": %lu, "pid": 0, "tid": 0, "args": {"value": %ld}})",
                    name.data(), timestamp, value);
+    }
+
+private:
+    void printCount(KMemType type, int64_t timestamp)
+    {
+        const auto &current = type == KMalloc ? currentAlloc : currentCached;
+        printCount(type == KMalloc ? "kmem_kmalloc_requested" : "kmem_cache_alloc_requested", current.requested, timestamp);
+        printCount(type == KMalloc ? "kmem_kmalloc_allocated" : "kmem_cache_alloc_allocated", current.allocated, timestamp);
     }
 
     std::vector<int64_t> cpuToTid;
@@ -266,6 +266,9 @@ struct Event
         } else if (name == "kmem_kfree" || name == "kmem_cache_free") {
             const auto ptr = get_uint64(event, event_fields_scope, "ptr").value();
             context->free(ptr, timestamp, name == "kmem_kfree" ? Context::KMalloc : Context::CacheAlloc);
+        } else if (name == "power_cpu_frequency") {
+            const auto state = get_uint64(event, event_fields_scope, "state").value();
+            context->printCount("CPU " + std::to_string(cpuId) + " frequency", state, timestamp);
         }
 
         auto removeSuffix = [this](std::string_view suffix)
