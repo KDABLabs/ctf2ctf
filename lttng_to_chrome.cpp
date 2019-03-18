@@ -37,6 +37,7 @@
 #include <string_view>
 #include <optional>
 #include <cstdio>
+#include <cmath>
 
 template<typename T, typename Cleanup>
 auto wrap(T* value, Cleanup cleanup)
@@ -114,6 +115,8 @@ KMemAlloc& operator-=(KMemAlloc &lhs, const KMemAlloc &rhs)
 
 struct Context
 {
+    static constexpr const uint64_t PAGE_SIZE = 4096;
+
     Context()
     {
         cpuToTid.reserve(32);
@@ -189,6 +192,18 @@ struct Context
         printCount(type, timestamp);
     }
 
+    void pageAlloc(uint32_t order, int64_t timestamp)
+    {
+        currentKmemPages += pow(2, order);
+        printCount("mm_page_alloc", currentKmemPages * PAGE_SIZE, timestamp);
+    }
+
+    void pageFree(uint32_t order, int64_t timestamp)
+    {
+        currentKmemPages -= pow(2, order);
+        printCount("mm_page_alloc", currentKmemPages * PAGE_SIZE, timestamp);
+    }
+
     void printCount(std::string_view name, int64_t value, int64_t timestamp)
     {
         if (firstCount) {
@@ -214,6 +229,8 @@ private:
     std::unordered_map<uint64_t, KMemAlloc> kmemCached;
     KMemAlloc currentAlloc;
     KMemAlloc currentCached;
+    std::unordered_map<uint64_t, uint64_t> kmemPages;
+    uint64_t currentKmemPages = 0;
     bool firstEvent = true;
     bool firstCount = true;
 };
@@ -269,6 +286,12 @@ struct Event
         } else if (name == "power_cpu_frequency") {
             const auto state = get_uint64(event, event_fields_scope, "state").value();
             context->printCount("CPU " + std::to_string(cpuId) + " frequency", state, timestamp);
+        } else if (name == "kmem_mm_page_alloc") {
+            const auto order = get_uint64(event, event_fields_scope, "order").value();
+            context->pageAlloc(order, timestamp);
+        } else if (name == "kmem_mm_page_free") {
+            const auto order = get_uint64(event, event_fields_scope, "order").value();
+            context->pageFree(order, timestamp);
         }
 
         auto removeSuffix = [this](std::string_view suffix)
