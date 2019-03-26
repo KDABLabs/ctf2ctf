@@ -38,6 +38,16 @@
 #include <optional>
 #include <cstdio>
 #include <cmath>
+#include <filesystem>
+
+template<typename Callback>
+void findMetadataFiles(const std::filesystem::path &path, Callback &&callback)
+{
+    for (const auto &entry : std::filesystem::recursive_directory_iterator(path)) {
+        if (entry.is_regular_file() && entry.path().filename() == "metadata")
+            callback(entry.path().parent_path().c_str());
+    }
+}
 
 template<typename T, typename Cleanup>
 auto wrap(T* value, Cleanup cleanup)
@@ -377,13 +387,25 @@ int main(int argc, char **argv)
                         "USAGE: lttng_to_chrome path/to/lttng/trace/folder\n");
         return 1;
     }
-    auto ctx = wrap(bt_context_create(), bt_context_put);
-
-    auto trace_id = bt_context_add_trace(ctx.get(), argv[1], "ctf", nullptr, nullptr, nullptr);
-    if (trace_id < 0) {
-        fprintf(stderr, "failed to open trace: %s (note: we don't recursively look for traces!)\n", argv[1]);
+    const auto path = std::filesystem::path(argv[1]);
+    if (!std::filesystem::exists(path)) {
+        fprintf(stderr, "path does not exist: %s\n", path.c_str());
         return 1;
     }
+
+    auto ctx = wrap(bt_context_create(), bt_context_put);
+
+    bool hasTrace = false;
+    findMetadataFiles(path, [&ctx, &hasTrace](const char *path) {
+        auto trace_id = bt_context_add_trace(ctx.get(), path, "ctf", nullptr, nullptr, nullptr);
+        if (trace_id < 0)
+            fprintf(stderr, "failed to open trace: %s\n", path);
+        else
+            hasTrace = true;
+    });
+
+    if (!hasTrace)
+        return 1;
 
     auto iter = wrap(bt_ctf_iter_create(ctx.get(), nullptr, nullptr), bt_ctf_iter_destroy);
     if (!iter) {

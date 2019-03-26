@@ -18,4 +18,4 @@ set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wpedantic")
 
 add_executable(lttng_to_chrome lttng_to_chrome.cpp)
-target_link_libraries(lttng_to_chrome ${BABELTRACE_LIBRARIES})
+target_link_libraries(lttng_to_chrome ${BABELTRACE_LIBRARIES} -lstdc++fs)
