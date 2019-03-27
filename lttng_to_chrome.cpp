@@ -389,7 +389,10 @@ struct Event
             const auto child_comm = get_char_array(event, event_fields_scope, "child_comm").value();
             context->printName(child_tid, child_pid, child_comm, timestamp);
         } else if (name == "lttng_statedump_process_state") {
+            const auto cpu = get_uint64(event, event_fields_scope, "cpu").value();
             const auto vtid = get_int64(event, event_fields_scope, "vtid").value();
+            context->setTid(cpu, vtid);
+
             const auto vpid = get_int64(event, event_fields_scope, "vpid").value();
             context->setPid(vtid, vpid);
 
