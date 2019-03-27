@@ -464,20 +464,24 @@ struct Event
             return true;
         };
 
-        auto rewriteName = [this](std::string_view prefix, std::string_view replacement)
+        auto rewriteName = [this](std::string_view needle, std::string_view replacement, bool atStart)
         {
-            if (!startsWith(name, prefix))
+            const auto pos = atStart ? 0 : name.find(needle);
+
+            if (atStart && !startsWith(name, needle))
+                return false;
+            else if (!atStart && pos == name.npos)
                 return false;
 
-            mutatedName = replacement;
-            mutatedName += name.substr(prefix.size());
+            mutatedName = name;
+            mutatedName.replace(pos, needle.size(), replacement);
             name = mutatedName;
             return true;
         };
 
-        if (removeSuffix("_entry") || rewriteName("syscall_entry_", "syscall_"))
+        if (removeSuffix("_entry") || rewriteName("syscall_entry_", "syscall_", true) || rewriteName("_begin_", "_", false) || rewriteName("_before_", "_", false))
             type = 'B';
-        else if (removeSuffix("_exit") || rewriteName("syscall_exit_", "syscall_"))
+        else if (removeSuffix("_exit") || rewriteName("syscall_exit_", "syscall_", true) || rewriteName("_end_", "_", false) || rewriteName("_after_", "_", false))
             type = 'E';
 
         // TODO: also parse /sys/kernel/debug/tracing/available_events if accessible
