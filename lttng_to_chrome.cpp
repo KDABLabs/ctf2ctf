@@ -151,6 +151,7 @@ struct Context
     {
         cpuToTid.reserve(32);
         tidToPid.reserve(1024);
+        cpuRunning.reserve(32);
     }
 
     int64_t tid(uint64_t cpuId) const
@@ -248,6 +249,25 @@ struct Context
         printCount("mm_page_alloc", currentKmemPages * PAGE_SIZE, timestamp);
     }
 
+    // swapper is the idle process on linux
+    static const constexpr int64_t SWAPPER_TID = 0;
+
+    void schedSwitch(uint64_t cpuId, int64_t prevTid, int64_t nextTid, int64_t timestamp)
+    {
+        if (prevTid == nextTid)
+            return;
+
+        if (cpuRunning.size() <= cpuId)
+            cpuRunning.resize(cpuId, false);
+
+        const bool wasRunning = cpuRunning[cpuId];
+        const bool isRunning = nextTid != SWAPPER_TID;
+        if (wasRunning != isRunning) {
+            printCount("CPU utilization", std::count(cpuRunning.begin(), cpuRunning.end(), true), timestamp);
+            cpuRunning[cpuId] = isRunning;
+        }
+    }
+
     void printCount(std::string_view name, int64_t value, int64_t timestamp)
     {
         if (isFiltered(name))
@@ -339,6 +359,7 @@ private:
     KMemAlloc currentCached;
     std::unordered_map<uint64_t, uint64_t> kmemPages;
     uint64_t currentKmemPages = 0;
+    std::vector<bool> cpuRunning;
     bool firstEvent = true;
     bool firstCount = true;
     struct EventStats
@@ -381,6 +402,9 @@ struct Event
             const auto next_pid = context->pid(next_tid);
             const auto next_comm = get_char_array(event, event_fields_scope, "next_comm").value();
             context->printName(next_tid, next_pid, next_comm, timestamp);
+
+            const auto prev_tid = get_int64(event, event_fields_scope, "prev_tid").value();
+            context->schedSwitch(cpuId, prev_tid, next_tid, timestamp);
         } else if (name == "sched_process_fork") {
             const auto child_tid = get_int64(event, event_fields_scope, "child_tid").value();
             const auto child_pid = get_int64(event, event_fields_scope, "child_pid").value();
@@ -391,13 +415,17 @@ struct Event
         } else if (name == "lttng_statedump_process_state") {
             const auto cpu = get_uint64(event, event_fields_scope, "cpu").value();
             const auto vtid = get_int64(event, event_fields_scope, "vtid").value();
-            context->setTid(cpu, vtid);
-
             const auto vpid = get_int64(event, event_fields_scope, "vpid").value();
+
+            context->setTid(cpu, vtid);
             context->setPid(vtid, vpid);
 
             const auto name = get_char_array(event, event_fields_scope, "name").value();
             context->printName(vtid, vpid, name, timestamp);
+
+            const auto state = get_int64(event, event_fields_scope, "status").value();
+            if (state & 0x1 /* TASK_INTERRUPTIBLE */)
+                context->schedSwitch(cpu, Context::SWAPPER_TID, vtid, timestamp);
         } else if (name == "sched_process_exec") {
             const auto tid = get_int64(event, event_fields_scope, "tid").value();
             const auto pid = context->pid(tid);
