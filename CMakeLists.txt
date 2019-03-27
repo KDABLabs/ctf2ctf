@@ -1,5 +1,5 @@
-cmake_minimum_required(VERSION 2.8.13)
-project(lttng_to_chrome)
+cmake_minimum_required(VERSION 3.0)
+project(lttng_to_chrome VERSION 0.1)
 
 if(NOT CMAKE_BUILD_TYPE)
   message(STATUS "Setting build type to 'RelWithDebInfo' as none was specified.")
