@@ -100,6 +100,18 @@ bool endsWith(std::string_view string, std::string_view suffix)
     return string.size() >= suffix.size() && std::equal(suffix.rbegin(), suffix.rend(), string.rbegin());
 }
 
+template<typename Whitelist, typename Needle>
+bool contains(const Whitelist &whitelist, const Needle &needle)
+{
+    return std::find(whitelist.begin(), whitelist.end(), needle) != whitelist.end();
+}
+
+template<typename Whitelist, typename Needle>
+bool isWhitelisted(const Whitelist &whitelist, const Needle &needle)
+{
+    return whitelist.empty() || contains(whitelist, needle);
+}
+
 struct KMemAlloc
 {
     uint64_t requested = 0;
@@ -132,11 +144,10 @@ struct Context
 {
     static constexpr const uint64_t PAGE_SIZE = 4096;
 
-    std::vector<std::string> exclude;
-    std::vector<int64_t> pidWhitelist;
-    bool enableStatistics = false;
+    CliOptions options;
 
-    Context()
+    Context(CliOptions options)
+        : options(std::move(options))
     {
         cpuToTid.reserve(32);
         tidToPid.reserve(1024);
@@ -166,7 +177,12 @@ struct Context
     {
         tidToPid[tid] = pid;
 
-        if (isFilteredByPid(pid))
+        if (isFilteredByProcessName(name))
+            return;
+
+        if (!options.processWhitelist.empty() && !contains(options.pidWhitelist, pid))
+            options.pidWhitelist.push_back(pid); // add pid to filer to exclude events
+        else if (isFilteredByPid(pid))
             return;
 
         auto printName = [this, tid, pid, name, timestamp](const char *type)
@@ -244,19 +260,26 @@ struct Context
 
     bool isFiltered(std::string_view name) const
     {
-        return std::any_of(exclude.begin(), exclude.end(), [name](const auto &pattern) {
+        return std::any_of(options.exclude.begin(), options.exclude.end(), [name](const auto &pattern) {
             return name.find(pattern) != name.npos;
         });
     }
 
     bool isFilteredByPid(int64_t pid) const
     {
-        return !pidWhitelist.empty() && std::find(pidWhitelist.begin(), pidWhitelist.end(), pid) == pidWhitelist.end();
+        return !isWhitelisted(options.pidWhitelist, pid)
+            // when the process name filter wasn't applied yet, filter all pids
+            || (options.pidWhitelist.empty() && !options.processWhitelist.empty());
+    }
+
+    bool isFilteredByProcessName(std::string_view name) const
+    {
+        return !isWhitelisted(options.processWhitelist, name);
     }
 
     void printStats(std::ostream &out) const
     {
-        if (!enableStatistics)
+        if (!options.enableStatistics)
             return;
 
         out << "Trace Data Statistics:\n\n";
@@ -280,7 +303,7 @@ struct Context
 private:
     void count(std::string_view name, std::string_view category)
     {
-        if (!enableStatistics)
+        if (!options.enableStatistics)
             return;
 
         auto count = [](auto &stats, auto name) {
@@ -475,12 +498,12 @@ void Context::parseEvent(bt_ctf_event* ctf_event)
 
 int main(int argc, char **argv)
 {
-    const auto cliOptions = parseCliOptions(argc, argv);
+    Context context(parseCliOptions(argc, argv));
 
     auto ctx = wrap(bt_context_create(), bt_context_put);
 
     bool hasTrace = false;
-    findMetadataFiles(cliOptions.path, [&ctx, &hasTrace](const char *path) {
+    findMetadataFiles(context.options.path, [&ctx, &hasTrace](const char *path) {
         auto trace_id = bt_context_add_trace(ctx.get(), path, "ctf", nullptr, nullptr, nullptr);
         if (trace_id < 0)
             fprintf(stderr, "failed to open trace: %s\n", path);
@@ -498,11 +521,6 @@ int main(int argc, char **argv)
     }
 
     printf("{\n  \"displayTimeUnit\": \"ns\",  \"traceEvents\": [");
-
-    Context context;
-    context.enableStatistics = cliOptions.enableStatistics;
-    context.exclude = cliOptions.exclude;
-    context.pidWhitelist = cliOptions.pidWhitelist;
 
     do {
         auto ctf_event = bt_ctf_iter_read_event(iter.get());
