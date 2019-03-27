@@ -194,8 +194,8 @@ struct Context
 
         auto printName = [this, tid, pid, name, timestamp](const char *type)
         {
-            printEvent(R"({"name": "%s", "ph": "M", "ts": %ld, "pid": %ld, "tid": %ld, "args": {"name": "%s"}})",
-                       type, timestamp, pid, tid, name.data());
+            printEvent(R"({"name": "%s", "ph": "M", "ts": %ld, "pid": %ld, "tid": %ld, "args": {"name": "%.*s"}})",
+                       type, timestamp, pid, tid, name.size(), name.data());
         };
         if (tid == pid)
             printName("process_name");
@@ -280,8 +280,8 @@ struct Context
             printEvent(R"({"name": "process_name", "ph": "M", "pid": 0, "tid": 0, "args": { "name": "kernel statistics" }})");
             firstCount = false;
         }
-        printEvent(R"({"name": "%s", "ph": "C", "ts": %lu, "pid": 0, "tid": 0, "args": {"value": %ld}})",
-                   name.data(), timestamp, value);
+        printEvent(R"({"name": "%.*s", "ph": "C", "ts": %lu, "pid": 0, "tid": 0, "args": {"value": %ld}})",
+                   name.size(), name.data(), timestamp, value);
     }
 
     bool isFiltered(std::string_view name) const
@@ -485,7 +485,7 @@ struct Event
             type = 'E';
 
         // TODO: also parse /sys/kernel/debug/tracing/available_events if accessible
-        const auto prefixes = {
+        static const auto prefixes = {
             "block",
             "irq",
             "jbd2",
@@ -540,11 +540,12 @@ void Context::parseEvent(bt_ctf_event* ctf_event)
         return;
 
     if (event.category.empty()) {
-        printEvent(R"({"name": "%s", "ph": "%c", "ts": %lu, "pid": %ld, "tid": %ld})",
-                event.name.data(), event.type, event.timestamp, event.pid, event.tid);
+        printEvent(R"({"name": "%.*s", "ph": "%c", "ts": %lu, "pid": %ld, "tid": %ld})",
+                   event.name.size(), event.name.data(), event.type, event.timestamp, event.pid, event.tid);
     } else {
-        printEvent(R"({"name": "%s", "ph": "%c", "ts": %lu, "pid": %ld, "tid": %ld, "cat": "%s"})",
-                event.name.data(), event.type, event.timestamp, event.pid, event.tid, event.category.data());
+        printEvent(R"({"name": "%.*s", "ph": "%c", "ts": %lu, "pid": %ld, "tid": %ld, "cat": "%.*s"})",
+                   event.name.size(), event.name.data(), event.type, event.timestamp, event.pid, event.tid,
+                   event.category.size(), event.category.data());
     }
 }
 
