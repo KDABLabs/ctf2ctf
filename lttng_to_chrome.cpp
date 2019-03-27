@@ -402,6 +402,7 @@ struct Event
         const auto prefixes = {
             "block",
             "irq",
+            "jbd2",
             "kmem",
             "lttng_statedump",
             "power",
