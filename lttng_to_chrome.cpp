@@ -228,9 +228,10 @@ struct Context
 
     void printCount(std::string_view name, int64_t value, int64_t timestamp)
     {
-        count(name, "Counter");
         if (isFiltered(name))
             return;
+
+        count(name, "Counter");
 
         if (firstCount) {
             printEvent(R"({"name": "process_sort_index", "ph": "M", "pid": 0, "tid": 0, "args": { "sort_index": -1 }})");
