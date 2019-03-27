@@ -130,6 +130,8 @@ struct Context
 {
     static constexpr const uint64_t PAGE_SIZE = 4096;
 
+    std::vector<std::string> exclude;
+
     Context()
     {
         cpuToTid.reserve(32);
@@ -219,6 +221,9 @@ struct Context
 
     void printCount(std::string_view name, int64_t value, int64_t timestamp)
     {
+        if (isFiltered(name))
+            return;
+
         if (firstCount) {
             printEvent(R"({"name": "process_sort_index", "ph": "M", "pid": 0, "tid": 0, "args": { "sort_index": -1 }})");
             printEvent(R"({"name": "process_name", "ph": "M", "pid": 0, "tid": 0, "args": { "name": "kernel statistics" }})");
@@ -226,6 +231,13 @@ struct Context
         }
         printEvent(R"({"name": "%s", "ph": "C", "ts": %lu, "pid": 0, "tid": 0, "args": {"value": %ld}})",
                    name.data(), timestamp, value);
+    }
+
+    bool isFiltered(std::string_view name) const
+    {
+        return std::any_of(exclude.begin(), exclude.end(), [name](const auto &pattern) {
+            return name.find(pattern) != name.npos;
+        });
     }
 
 private:
@@ -374,6 +386,9 @@ void Context::parseEvent(bt_ctf_event* ctf_event)
 {
     const auto event = Event(ctf_event, this);
 
+    if (isFiltered(event.name))
+        return;
+
     if (event.category.empty()) {
         printEvent(R"({"name": "%s", "ph": "%c", "ts": %lu, "pid": %ld, "tid": %ld})",
                 event.name.data(), event.type, event.timestamp, event.pid, event.tid);
@@ -387,6 +402,7 @@ int main(int argc, char **argv)
 {
     args::ArgumentParser parser("Convert binary LTTng/Common Trace Format trace data to JSON in Chrome Trace Format", "The converted trace data in JSON format is written to stdout.");
     args::HelpFlag helpArg(parser, "help", "Display this help menu", {'h', "help"});
+    args::ValueFlagList<std::string> excludeArg(parser, "name substring", "Exclude events with this name", {'x', "exclude"});
     args::Positional<std::filesystem::path> pathArg(parser, "path", "The path to an LTTng trace folder, will be searched recursively for trace data");
     try {
         parser.ParseCLI(argc, argv);
@@ -427,6 +443,10 @@ int main(int argc, char **argv)
     printf("{\n  \"displayTimeUnit\": \"ns\",  \"traceEvents\": [");
 
     Context context;
+
+    if (excludeArg)
+        context.exclude = args::get(excludeArg);
+
     do {
         auto ctf_event = bt_ctf_iter_read_event(iter.get());
         if (!ctf_event)
