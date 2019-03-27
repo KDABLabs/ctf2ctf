@@ -39,6 +39,9 @@
 #include <cstdio>
 #include <cmath>
 #include <filesystem>
+#include <iostream>
+
+#include "args/args.hxx"
 
 template<typename Callback>
 void findMetadataFiles(const std::filesystem::path &path, Callback &&callback)
@@ -382,14 +385,22 @@ void Context::parseEvent(bt_ctf_event* ctf_event)
 
 int main(int argc, char **argv)
 {
-    if (argc != 2) {
-        fprintf(stderr, "ERROR: missing path to CTF trace\n"
-                        "USAGE: lttng_to_chrome path/to/lttng/trace/folder\n");
+    args::ArgumentParser parser("Convert binary LTTng/Common Trace Format trace data to JSON in Chrome Trace Format", "The converted trace data in JSON format is written to stdout.");
+    args::HelpFlag helpArg(parser, "help", "Display this help menu", {'h', "help"});
+    args::Positional<std::filesystem::path> pathArg(parser, "path", "The path to an LTTng trace folder, will be searched recursively for trace data");
+    try {
+        parser.ParseCLI(argc, argv);
+    } catch (const args::Help&) {
+        std::cout << parser;
+        return 0;
+    } catch (const std::exception& e) {
+        std::cerr << e.what() << std::endl << parser;
         return 1;
     }
-    const auto path = std::filesystem::path(argv[1]);
+
+    const auto path = args::get(pathArg);
     if (!std::filesystem::exists(path)) {
-        fprintf(stderr, "path does not exist: %s\n", path.c_str());
+        std::cerr << "path does not exist: " << path << std::endl;
         return 1;
     }
 
