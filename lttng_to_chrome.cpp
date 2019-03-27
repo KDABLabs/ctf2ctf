@@ -133,6 +133,7 @@ struct Context
     static constexpr const uint64_t PAGE_SIZE = 4096;
 
     std::vector<std::string> exclude;
+    std::vector<int64_t> pidWhitelist;
     bool enableStatistics = false;
 
     Context()
@@ -164,6 +165,9 @@ struct Context
     void setPid(int64_t tid, int64_t pid, std::string_view name, int64_t timestamp)
     {
         tidToPid[tid] = pid;
+
+        if (isFilteredByPid(pid))
+            return;
 
         auto printName = [this, tid, pid, name, timestamp](const char *type)
         {
@@ -242,6 +246,11 @@ struct Context
         return std::any_of(exclude.begin(), exclude.end(), [name](const auto &pattern) {
             return name.find(pattern) != name.npos;
         });
+    }
+
+    bool isFilteredByPid(int64_t pid) const
+    {
+        return !pidWhitelist.empty() && std::find(pidWhitelist.begin(), pidWhitelist.end(), pid) == pidWhitelist.end();
     }
 
     void printStats(std::ostream &out) const
@@ -451,7 +460,7 @@ void Context::parseEvent(bt_ctf_event* ctf_event)
 
     count(event.name, event.category);
 
-    if (isFiltered(event.name))
+    if (isFiltered(event.name) || isFilteredByPid(event.pid))
         return;
 
     if (event.category.empty()) {
@@ -492,6 +501,7 @@ int main(int argc, char **argv)
     Context context;
     context.enableStatistics = cliOptions.enableStatistics;
     context.exclude = cliOptions.exclude;
+    context.pidWhitelist = cliOptions.pidWhitelist;
 
     do {
         auto ctf_event = bt_ctf_iter_read_event(iter.get());

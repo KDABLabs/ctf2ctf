@@ -8,6 +8,7 @@ struct CliOptions
 {
     std::filesystem::path path;
     std::vector<std::string> exclude;
+    std::vector<int64_t> pidWhitelist;
     bool enableStatistics = false;
 };
 
