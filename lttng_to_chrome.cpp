@@ -424,6 +424,12 @@ struct Event
                 break;
             }
         }
+
+        if (category.empty()) {
+            auto colonPos = name.find(':');
+            if (colonPos != name.npos)
+                category = name.substr(0, colonPos);
+        }
     }
 
     std::string_view name;
