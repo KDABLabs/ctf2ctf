@@ -41,8 +41,9 @@
 #include <filesystem>
 #include <iostream>
 #include <iomanip>
+#include <algorithm>
 
-#include "args/args.hxx"
+#include "clioptions.h"
 
 template<typename Callback>
 void findMetadataFiles(const std::filesystem::path &path, Callback &&callback)
@@ -464,31 +465,12 @@ void Context::parseEvent(bt_ctf_event* ctf_event)
 
 int main(int argc, char **argv)
 {
-    args::ArgumentParser parser("Convert binary LTTng/Common Trace Format trace data to JSON in Chrome Trace Format", "The converted trace data in JSON format is written to stdout.");
-    args::HelpFlag helpArg(parser, "help", "Display this help menu", {'h', "help"});
-    args::ValueFlagList<std::string> excludeArg(parser, "name substring", "Exclude events with this name", {'x', "exclude"});
-    args::Flag printStatsArg(parser, "stats", "print statistics to stderr", {"print-stats"});
-    args::Positional<std::filesystem::path> pathArg(parser, "path", "The path to an LTTng trace folder, will be searched recursively for trace data");
-    try {
-        parser.ParseCLI(argc, argv);
-    } catch (const args::Help&) {
-        std::cout << parser;
-        return 0;
-    } catch (const std::exception& e) {
-        std::cerr << e.what() << std::endl << parser;
-        return 1;
-    }
-
-    const auto path = args::get(pathArg);
-    if (!std::filesystem::exists(path)) {
-        std::cerr << "path does not exist: " << path << std::endl;
-        return 1;
-    }
+    const auto cliOptions = parseCliOptions(argc, argv);
 
     auto ctx = wrap(bt_context_create(), bt_context_put);
 
     bool hasTrace = false;
-    findMetadataFiles(path, [&ctx, &hasTrace](const char *path) {
+    findMetadataFiles(cliOptions.path, [&ctx, &hasTrace](const char *path) {
         auto trace_id = bt_context_add_trace(ctx.get(), path, "ctf", nullptr, nullptr, nullptr);
         if (trace_id < 0)
             fprintf(stderr, "failed to open trace: %s\n", path);
@@ -508,10 +490,8 @@ int main(int argc, char **argv)
     printf("{\n  \"displayTimeUnit\": \"ns\",  \"traceEvents\": [");
 
     Context context;
-    context.enableStatistics = args::get(printStatsArg);
-
-    if (excludeArg)
-        context.exclude = args::get(excludeArg);
+    context.enableStatistics = cliOptions.enableStatistics;
+    context.exclude = cliOptions.exclude;
 
     do {
         auto ctf_event = bt_ctf_iter_read_event(iter.get());
