@@ -400,7 +400,7 @@ struct Event
 
         // TODO: also parse /sys/kernel/debug/tracing/available_events if accessible
         const auto prefixes = {
-            "block"
+            "block",
             "irq",
             "kmem",
             "lttng_statedump",
