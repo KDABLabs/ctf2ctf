@@ -40,6 +40,7 @@
 #include <cmath>
 #include <filesystem>
 #include <iostream>
+#include <iomanip>
 
 #include "args/args.hxx"
 
@@ -131,6 +132,7 @@ struct Context
     static constexpr const uint64_t PAGE_SIZE = 4096;
 
     std::vector<std::string> exclude;
+    bool enableStatistics = false;
 
     Context()
     {
@@ -221,6 +223,7 @@ struct Context
 
     void printCount(std::string_view name, int64_t value, int64_t timestamp)
     {
+        count(name, "Counter");
         if (isFiltered(name))
             return;
 
@@ -240,7 +243,47 @@ struct Context
         });
     }
 
+    void printStats(std::ostream &out) const
+    {
+        if (!enableStatistics)
+            return;
+
+        out << "Trace Data Statistics:\n\n";
+
+        auto printSortedStats = [&out](const auto &stats) {
+            auto sortedStats = stats;
+            std::sort(sortedStats.begin(), sortedStats.end(), [](const auto &lhs, const auto &rhs) {
+                return lhs.counter < rhs.counter;
+            });
+            for (const auto &entry : sortedStats)
+                out << std::setw(16) << entry.counter << '\t' << entry.name << '\n';
+        };
+
+        out << "Event Stats:\n";
+        printSortedStats(eventStats);
+
+        out << "\nEvent Category Stats:\n";
+        printSortedStats(categoryStats);
+    }
+
 private:
+    void count(std::string_view name, std::string_view category)
+    {
+        if (!enableStatistics)
+            return;
+
+        auto count = [](auto &stats, auto name) {
+            auto it = std::lower_bound(stats.begin(), stats.end(), name, [](const auto &entry, const auto &name) {
+                return entry.name < name;
+            });
+            if (it == stats.end() || it->name != name)
+                it = stats.insert(it, {std::string(name)});
+            it->counter++;
+        };
+        count(eventStats, name);
+        count(categoryStats, category.empty() ? "uncategorized" : category);
+    }
+
     void printCount(KMemType type, int64_t timestamp)
     {
         const auto &current = type == KMalloc ? currentAlloc : currentCached;
@@ -258,6 +301,18 @@ private:
     uint64_t currentKmemPages = 0;
     bool firstEvent = true;
     bool firstCount = true;
+    struct EventStats
+    {
+        std::string name;
+        uint64_t counter = 0;
+    };
+    std::vector<EventStats> eventStats;
+    struct CategoryStats
+    {
+        std::string name;
+        uint64_t counter = 0;
+    };
+    std::vector<CategoryStats> categoryStats;
 };
 
 struct Event
@@ -386,6 +441,8 @@ void Context::parseEvent(bt_ctf_event* ctf_event)
 {
     const auto event = Event(ctf_event, this);
 
+    count(event.name, event.category);
+
     if (isFiltered(event.name))
         return;
 
@@ -403,6 +460,7 @@ int main(int argc, char **argv)
     args::ArgumentParser parser("Convert binary LTTng/Common Trace Format trace data to JSON in Chrome Trace Format", "The converted trace data in JSON format is written to stdout.");
     args::HelpFlag helpArg(parser, "help", "Display this help menu", {'h', "help"});
     args::ValueFlagList<std::string> excludeArg(parser, "name substring", "Exclude events with this name", {'x', "exclude"});
+    args::Flag printStatsArg(parser, "stats", "print statistics to stderr", {"print-stats"});
     args::Positional<std::filesystem::path> pathArg(parser, "path", "The path to an LTTng trace folder, will be searched recursively for trace data");
     try {
         parser.ParseCLI(argc, argv);
@@ -443,6 +501,7 @@ int main(int argc, char **argv)
     printf("{\n  \"displayTimeUnit\": \"ns\",  \"traceEvents\": [");
 
     Context context;
+    context.enableStatistics = args::get(printStatsArg);
 
     if (excludeArg)
         context.exclude = args::get(excludeArg);
@@ -460,6 +519,8 @@ int main(int argc, char **argv)
     } while (bt_iter_next(bt_ctf_get_iter(iter.get())) == 0);
 
     printf("\n  ]\n}\n");
+
+    context.printStats(std::cerr);
 
     return 0;
 }
