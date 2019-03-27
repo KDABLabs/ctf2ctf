@@ -173,16 +173,22 @@ struct Context
         cpuToTid[cpuId] = tid;
     }
 
-    void setPid(int64_t tid, int64_t pid, std::string_view name, int64_t timestamp)
+    void setPid(int64_t tid, int64_t pid)
     {
         tidToPid[tid] = pid;
+    }
 
-        if (isFilteredByProcessName(name))
-            return;
+    void printName(int64_t tid, int64_t pid, std::string_view name, int64_t timestamp)
+    {
+        if (tid == pid) {
+            if (isFilteredByProcessName(name))
+                return;
 
-        if (!options.processWhitelist.empty() && !contains(options.pidWhitelist, pid))
-            options.pidWhitelist.push_back(pid); // add pid to filer to exclude events
-        else if (isFilteredByPid(pid))
+            if (!options.processWhitelist.empty() && !contains(options.pidWhitelist, pid))
+                options.pidWhitelist.push_back(pid); // add pid to filer to exclude events
+        }
+
+        if (isFilteredByPid(pid))
             return;
 
         auto printName = [this, tid, pid, name, timestamp](const char *type)
@@ -371,23 +377,34 @@ struct Event
         if (name == "sched_switch") {
             const auto next_tid = get_int64(event, event_fields_scope, "next_tid").value();
             context->setTid(cpuId, next_tid);
+
+            const auto next_pid = context->pid(next_tid);
+            const auto next_comm = get_char_array(event, event_fields_scope, "next_comm").value();
+            context->printName(next_tid, next_pid, next_comm, timestamp);
         } else if (name == "sched_process_fork") {
             const auto child_tid = get_int64(event, event_fields_scope, "child_tid").value();
             const auto child_pid = get_int64(event, event_fields_scope, "child_pid").value();
+            context->setPid(child_tid, child_pid);
+
             const auto child_comm = get_char_array(event, event_fields_scope, "child_comm").value();
-            context->setPid(child_tid, child_pid, child_comm, timestamp);
+            context->printName(child_tid, child_pid, child_comm, timestamp);
         } else if (name == "lttng_statedump_process_state") {
             const auto vtid = get_int64(event, event_fields_scope, "vtid").value();
             const auto vpid = get_int64(event, event_fields_scope, "vpid").value();
+            context->setPid(vtid, vpid);
+
             const auto name = get_char_array(event, event_fields_scope, "name").value();
-            context->setPid(vtid, vpid, name, timestamp);
+            context->printName(vtid, vpid, name, timestamp);
         } else if (name == "sched_process_exec") {
             const auto tid = get_int64(event, event_fields_scope, "tid").value();
+            const auto pid = context->pid(tid);
+            context->setPid(tid, pid);
+
             auto filename = std::string_view(get_string(event, event_fields_scope, "filename").value());
             auto it = filename.find_last_of('/');
             if (it != filename.npos)
                 filename.remove_prefix(it + 1);
-            context->setPid(tid, context->pid(tid), filename, timestamp);
+            context->printName(tid, pid, filename, timestamp);
         } else if (name == "kmem_kmalloc" || name == "kmem_cache_alloc") {
             const auto ptr = get_uint64(event, event_fields_scope, "ptr").value();
             const auto bytes_req = get_uint64(event, event_fields_scope, "bytes_req").value();
