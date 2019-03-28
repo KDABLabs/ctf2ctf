@@ -37,6 +37,7 @@
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -100,10 +101,16 @@ bool endsWith(std::string_view string, std::string_view suffix)
     return string.size() >= suffix.size() && std::equal(suffix.rbegin(), suffix.rend(), string.rbegin());
 }
 
-template<typename Whitelist, typename Needle>
-bool contains(const Whitelist& whitelist, const Needle& needle)
+template<typename List, typename Needle>
+bool contains(List&& list, const Needle& needle)
 {
-    return std::find(whitelist.begin(), whitelist.end(), needle) != whitelist.end();
+    return std::find(list.begin(), list.end(), needle) != list.end();
+}
+
+template<typename T1, typename T2>
+bool contains(const std::initializer_list<T1>& list, const T2& needle)
+{
+    return std::find(begin(list), end(list), needle) != end(list);
 }
 
 template<typename Whitelist, typename Needle>
@@ -152,7 +159,6 @@ struct Context
         cores.reserve(32);
         pids.reserve(1024);
         tids.reserve(1024);
-        argsBuffer.reserve(1024);
     }
 
     int64_t tid(uint64_t cpuId) const
@@ -489,7 +495,7 @@ private:
         uint64_t counter = 0;
     };
     std::vector<CategoryStats> categoryStats;
-    std::string argsBuffer;
+    std::stringstream argsStream;
 };
 
 struct Event
@@ -744,8 +750,8 @@ void fillArgs(const bt_ctf_event* event, const bt_definition* scope, ValueFormat
 
 struct Formatter
 {
-    Formatter(std::string* buffer, Context* context, const Event* event)
-        : buffer(buffer)
+    Formatter(std::stringstream& stream, Context* context, const Event* event)
+        : stream(stream)
         , context(context)
         , event(event)
     {
@@ -754,7 +760,7 @@ struct Formatter
     void operator()(std::string_view field, int64_t value)
     {
         newField(field);
-        *buffer += std::to_string(value);
+        stream << std::to_string(value);
 
         if (field == "fd" && event->category == "syscall") {
             (*this)("file", context->fdToFilename(event->pid, value));
@@ -763,10 +769,38 @@ struct Formatter
         }
     }
 
+    bool isHexField(std::string_view field) const
+    {
+        if (event->category != "syscall" && contains({"addr", "buf", "start"}, field))
+            return true;
+
+        if (event->name == "syscall_rt_sigprocmask" && contains({"nset", "oset"}, field))
+            return true;
+
+        if (event->name == "syscall_futex" && contains({"uaddr", "uaddr2"}, field))
+            return true;
+
+        if (event->name == "syscall_sendmsg" && field == "msg")
+            return true;
+
+        if (startsWith(event->category, "qt") && contains({"object", "event", "sender", "receiver"}, field))
+            return true;
+
+        if (event->name == "qtgui:QImageReader_read_reading" && field == "reader")
+            return true;
+
+        return false;
+    }
+
     void operator()(std::string_view field, uint64_t value)
     {
         newField(field);
-        *buffer += std::to_string(value);
+
+        if (isHexField(field)) {
+            stream << "\"0x" << std::hex << value << '"' << std::dec;
+        } else {
+            stream << value;
+        }
 
         if (field == "fd" && event->category == "syscall") {
             (*this)("file", context->fdToFilename(event->pid, static_cast<int64_t>(value)));
@@ -787,16 +821,16 @@ struct Formatter
         newField(field);
         switch (error) {
         case ArgError::UnknownType:
-            *buffer += "\"<unknown type>\"";
+            stream << "\"<unknown type>\"";
             break;
         case ArgError::UnknownSignedness:
-            *buffer += "\"<unknown signedness>\"";
+            stream << "\"<unknown signedness>\"";
             break;
         case ArgError::UnhandledArrayType:
-            *buffer += "\"<unhandled array type " + std::to_string(arg) + ">\"";
+            stream << "\"<unhandled array type " << arg << ">\"";
             break;
         case ArgError::UnhandledType:
-            *buffer += "\"<unhandled type " + std::to_string(arg) + ">\"";
+            stream << "\"<unhandled type " << arg << ">\"";
             break;
         }
     }
@@ -827,29 +861,29 @@ struct Formatter
         }
 
         newField(field);
-        *buffer += '[';
+        stream << '[';
         for (unsigned i = 0; i < numEntries; ++i) {
             const auto* def = sequence[i];
             const auto* decl = bt_ctf_get_decl_from_def(def);
             const auto type = bt_ctf_field_type(decl);
 
             if (i > 0)
-                *buffer += ", ";
+                stream << ", ";
 
             switch (type) {
             case CTF_TYPE_UNKNOWN:
-                *buffer += "\"<unknown type>\"";
+                stream << "\"<unknown type>\"";
                 break;
             case CTF_TYPE_INTEGER:
                 switch (bt_ctf_get_int_signedness(decl)) {
                 case 0:
-                    *buffer += std::to_string(bt_ctf_get_uint64(def));
+                    stream << bt_ctf_get_uint64(def);
                     break;
                 case 1:
-                    *buffer += std::to_string(bt_ctf_get_int64(def));
+                    stream << bt_ctf_get_int64(def);
                     break;
                 default:
-                    *buffer += "\"<unknown integer signedness>\"";
+                    stream << "\"<unknown integer signedness>\"";
                     break;
                 }
                 break;
@@ -859,45 +893,49 @@ struct Formatter
             case CTF_TYPE_ARRAY: {
                 const auto encoding = bt_ctf_get_encoding(decl);
                 if (encoding != CTF_STRING_ASCII && encoding != CTF_STRING_UTF8) {
-                    *buffer += "\"<unhandled array type " + std::to_string(encoding) + ">\"";
+                    stream << "\"<unhandled array type " << encoding << ">\"";
                 } else {
                     writeString(bt_ctf_get_char_array(def));
                 }
                 break;
             }
             default:
-                *buffer += "\"<unhandled type " + std::to_string(type) + ">\"";
+                stream << "\"<unhandled type " << type << ">\"";
                 break;
             }
         }
-        *buffer += ']';
+        stream << ']';
     }
 
     void newField(std::string_view field)
     {
-        if (!buffer->empty())
-            *buffer += ", ";
+        if (firstField)
+            firstField = false;
+        else
+            stream << ", ";
+
         writeString(field);
-        *buffer += ": ";
+        stream << ": ";
     }
 
     void writeString(std::string_view string)
     {
-        *buffer += '"';
+        stream << '"';
         for (auto c : string) {
             if (c == '\\')
-                *buffer += "\\\\";
+                stream << "\\\\";
             else if (c == '"')
-                *buffer += "\\\"";
+                stream << "\\\"";
             else
-                *buffer += c;
+                stream << c;
         }
-        *buffer += '"';
+        stream << '"';
     }
 
-    std::string* buffer;
+    std::stringstream& stream;
     Context* context;
     const Event* event;
+    bool firstField = true;
 };
 
 void Context::parseEvent(bt_ctf_event* ctf_event)
@@ -909,18 +947,18 @@ void Context::parseEvent(bt_ctf_event* ctf_event)
     if (isFiltered(event.name) || isFilteredByPid(event.pid))
         return;
 
-    argsBuffer.clear();
+    argsStream.str({});
     if (event.event_fields_scope)
-        fillArgs(ctf_event, event.event_fields_scope, Formatter(&argsBuffer, this, &event));
+        fillArgs(ctf_event, event.event_fields_scope, Formatter(argsStream, this, &event));
 
     if (event.category.empty()) {
         printEvent(R"({"name": "%.*s", "ph": "%c", "ts": %lu, "pid": %ld, "tid": %ld, "args": {%s}})",
                    event.name.size(), event.name.data(), event.type, event.timestamp, event.pid, event.tid,
-                   argsBuffer.c_str());
+                   argsStream.str().c_str());
     } else {
         printEvent(R"({"name": "%.*s", "ph": "%c", "ts": %lu, "pid": %ld, "tid": %ld, "cat": "%.*s", "args": {%s}})",
                    event.name.size(), event.name.data(), event.type, event.timestamp, event.pid, event.tid,
-                   event.category.size(), event.category.data(), argsBuffer.c_str());
+                   event.category.size(), event.category.data(), argsStream.str().c_str());
     }
 }
 
