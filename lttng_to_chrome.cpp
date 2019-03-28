@@ -1,13 +1,13 @@
 /*
   lttng_to_chrome.cpp
 
-  This file is part of lttng_to_chrome, a converter from LTTng/CTF to Chromium's Common Trace Format.
+  This file is part of ctf2ctf, a converter from LTTng/CTF to Chromium's Common Trace Format.
 
   Copyright (C) 2019 Klarälvdalens Datakonsult AB, a KDAB Group company, info@kdab.com
   Author: Milian Wolff <milian.wolff@kdab.com>
 
-  Licensees holding valid commercial KDAB Hotspot licenses may use this file in
-  accordance with Hotspot Commercial License Agreement provided with the Software.
+  Licensees holding valid commercial KDAB ctf2ctf licenses may use this file in
+  accordance with ctf2ctf Commercial License Agreement provided with the Software.
 
   Contact info@kdab.com if any conditions of this licensing are not clear to you.
 
