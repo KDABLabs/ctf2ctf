@@ -149,34 +149,33 @@ struct Context
     Context(CliOptions options)
         : options(std::move(options))
     {
-        cpuToTid.reserve(32);
-        tidToPid.reserve(1024);
-        cpuRunning.reserve(32);
+        cores.reserve(32);
+        tids.reserve(1024);
     }
 
     int64_t tid(uint64_t cpuId) const
     {
-        if (cpuToTid.size() <= cpuId)
-            return -1;
-        return cpuToTid[cpuId];
+        if (cores.size() <= cpuId)
+            return INVALID_TID;
+        return cores[cpuId].tid;
     }
 
     int64_t pid(int64_t tid) const
     {
-        auto it = tidToPid.find(tid);
-        return it == tidToPid.end() ? -1 : it->second;
+        auto it = tids.find(tid);
+        return it == tids.end() ? INVALID_TID : it->second.pid;
     }
 
     void setTid(uint64_t cpuId, int64_t tid)
     {
-        if (cpuToTid.size() <= cpuId)
-            cpuToTid.resize(cpuId + 1);
-        cpuToTid[cpuId] = tid;
+        if (cores.size() <= cpuId)
+            cores.resize(cpuId + 1);
+        cores[cpuId].tid = tid;
     }
 
     void setPid(int64_t tid, int64_t pid)
     {
-        tidToPid[tid] = pid;
+        tids[tid].pid = pid;
     }
 
     void printName(int64_t tid, int64_t pid, std::string_view name, int64_t timestamp)
@@ -192,13 +191,19 @@ struct Context
         if (isFilteredByPid(pid))
             return;
 
-        auto printName = [this, tid, pid, name, timestamp](const char* type) {
+        auto printName = [this, tid, pid, name, timestamp](const char* type, int64_t id) {
+            if (id == INVALID_TID)
+                return;
+            auto it = tids.find(id);
+            if (it != tids.end() && it->second.name == name)
+                return;
+            tids[tid].name = name;
+
             printEvent(R"({"name": "%s", "ph": "M", "ts": %ld, "pid": %ld, "tid": %ld, "args": {"name": "%.*s"}})",
                        type, timestamp, pid, tid, name.size(), name.data());
         };
-        if (tid == pid)
-            printName("process_name");
-        printName("thread_name");
+        printName("process_name", pid);
+        printName("thread_name", tid);
     }
 
     template<typename... T>
@@ -257,16 +262,41 @@ struct Context
         if (prevTid == nextTid)
             return;
 
-        if (cpuRunning.size() <= cpuId)
-            cpuRunning.resize(cpuId, false);
+        if (cores.size() <= cpuId)
+            cores.resize(cpuId);
 
-        const bool wasRunning = cpuRunning[cpuId];
+        auto& core = cores[cpuId];
+
+        const bool wasRunning = core.running;
         const bool isRunning = nextTid != SWAPPER_TID;
         if (wasRunning != isRunning) {
-            printCount(CounterGroup::CPU, "CPU utilization", std::count(cpuRunning.begin(), cpuRunning.end(), true),
-                       timestamp);
-            cpuRunning[cpuId] = isRunning;
+            const auto numRunning = std::count_if(cores.begin(), cores.end(), [](auto core) { return core.running; });
+            printCount(CounterGroup::CPU, "CPU utilization", numRunning, timestamp);
+            core.running = isRunning;
         }
+
+        const auto group = dataFor(CounterGroup::CPU);
+        const auto eventTid = CPU_PROCESS_TID_MULTIPLICATOR * static_cast<int64_t>(cpuId + 1);
+        if (!core.printedCpuStateName) {
+            printEvent(
+                R"({"name": "thread_name", "ph": "M", "pid": %ld, "tid": %ld, "args": { "name": "CPU %lu State" }})",
+                group.id, eventTid, cpuId);
+            core.printedCpuStateName = true;
+        }
+
+        auto printCpuCoreProcessEvent = [this, eventTid, timestamp, group](int64_t tid, char type) {
+            if (tid == SWAPPER_TID)
+                return;
+
+            if (isFilteredByPid(pid(tid)))
+                return;
+
+            const auto& comm = tids[tid].name;
+            printEvent(R"#({"name": "%s (%ld)", "ph": "%c", "ts": %lu, "pid": %ld, "tid": %ld, "cat": "process"})#",
+                       comm.c_str(), tid, type, timestamp, group.id, eventTid);
+        };
+        printCpuCoreProcessEvent(prevTid, 'E');
+        printCpuCoreProcessEvent(nextTid, 'B');
     }
 
     void cpuFrequency(uint64_t cpuId, uint64_t frequency, int64_t timestamp)
@@ -340,55 +370,77 @@ private:
                    current.allocated, timestamp);
     }
 
+    enum SpecialIds
+    {
+        INVALID_TID = -1,
+        CPU_COUNTER_PID = -2,
+        MEMORY_COUNTER_PID = -3,
+        // cpu id * multiplicator gives us a thread id for per-core events
+        CPU_PROCESS_TID_MULTIPLICATOR = -100,
+    };
     enum class CounterGroup
     {
         CPU,
         Memory,
     };
+    struct GroupData
+    {
+        const char* const name;
+        const int64_t id;
+        bool namePrinted;
+    };
+    GroupData dataFor(CounterGroup counterGroup)
+    {
+        static GroupData groups[] = {
+            {"CPU statistics", CPU_COUNTER_PID, false},
+            {"Memory statistics", MEMORY_COUNTER_PID, false},
+        };
+        const auto groupIndex = static_cast<std::underlying_type_t<CounterGroup>>(counterGroup);
+        auto& group = groups[groupIndex];
+        if (!group.namePrinted) {
+            printEvent(
+                R"({"name": "process_sort_index", "ph": "M", "pid": %1$ld, "tid": %1$ld, "args": { "sort_index": %1$ld }})",
+                group.id);
+            printEvent(R"({"name": "process_name", "ph": "M", "pid": %1$ld, "tid": %1$ld, "args": { "name": "%2$s" }})",
+                       group.id, group.name);
+            group.namePrinted = true;
+        }
+        return group;
+    }
     void printCount(CounterGroup counterGroup, std::string_view name, int64_t value, int64_t timestamp)
     {
         if (isFiltered(name))
             return;
 
-        struct GroupData
-        {
-            const char* const name;
-            const int64_t id;
-            bool firstCount;
-        };
-        static GroupData groups[] = {
-            {"CPU statistics", -2, true},
-            {"Memory statistics", -3, true},
-        };
-        const auto groupIndex = static_cast<std::underlying_type_t<CounterGroup>>(counterGroup);
-        auto& group = groups[groupIndex];
-        const auto groupId = group.id;
-        const auto groupName = group.name;
-        auto& firstCount = group.firstCount;
+        const auto group = dataFor(counterGroup);
+        count(name, group.name);
 
-        count(name, groupName);
-
-        if (firstCount) {
-            printEvent(
-                R"({"name": "process_sort_index", "ph": "M", "pid": %1$ld, "tid": %1$ld, "args": { "sort_index": %1$ld }})",
-                groupId);
-            printEvent(R"({"name": "process_name", "ph": "M", "pid": %1$ld, "tid": %1$ld, "args": { "name": "%2$s" }})",
-                       groupId, groupName);
-            firstCount = false;
-        }
         printEvent(R"({"name": "%.*s", "ph": "C", "ts": %lu, "pid": %ld, "tid": %ld, "args": {"value": %ld}})",
-                   name.size(), name.data(), timestamp, groupId, groupId, value);
+                   name.size(), name.data(), timestamp, group.id, group.id, value);
     }
 
-    std::vector<int64_t> cpuToTid;
-    std::unordered_map<int64_t, int64_t> tidToPid;
+    struct CoreData
+    {
+        // currently running thread id
+        int64_t tid = INVALID_TID;
+        // true if core is currently running a non-idle process
+        bool running = false;
+        // true if we printed the name for the 'CPU State' thread
+        bool printedCpuStateName = false;
+    };
+    std::vector<CoreData> cores;
+    struct TidData
+    {
+        int64_t pid = INVALID_TID;
+        std::string name;
+    };
+    std::unordered_map<int64_t, TidData> tids;
     std::unordered_map<uint64_t, KMemAlloc> kmem;
     std::unordered_map<uint64_t, KMemAlloc> kmemCached;
     KMemAlloc currentAlloc;
     KMemAlloc currentCached;
     std::unordered_map<uint64_t, uint64_t> kmemPages;
     uint64_t currentKmemPages = 0;
-    std::vector<bool> cpuRunning;
     bool firstEvent = true;
     struct EventStats
     {
@@ -432,6 +484,10 @@ struct Event
             context->printName(next_tid, next_pid, next_comm, timestamp);
 
             const auto prev_tid = get_int64(event, event_fields_scope, "prev_tid").value();
+            const auto prev_pid = context->pid(prev_tid);
+            const auto prev_comm = get_char_array(event, event_fields_scope, "prev_comm").value();
+            context->printName(prev_tid, prev_pid, prev_comm, timestamp);
+
             context->schedSwitch(cpuId, prev_tid, next_tid, timestamp);
         } else if (name == "sched_process_fork") {
             const auto child_tid = get_int64(event, event_fields_scope, "child_tid").value();
@@ -450,10 +506,6 @@ struct Event
 
             const auto name = get_char_array(event, event_fields_scope, "name").value();
             context->printName(vtid, vpid, name, timestamp);
-
-            const auto state = get_int64(event, event_fields_scope, "status").value();
-            if (state & 0x1 /* TASK_INTERRUPTIBLE */)
-                context->schedSwitch(cpu, Context::SWAPPER_TID, vtid, timestamp);
         } else if (name == "sched_process_exec") {
             const auto tid = get_int64(event, event_fields_scope, "tid").value();
             const auto pid = context->pid(tid);
