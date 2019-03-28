@@ -240,13 +240,13 @@ struct Context
     void pageAlloc(uint32_t order, int64_t timestamp)
     {
         currentKmemPages += pow(2, order);
-        printCount("mm_page_alloc", currentKmemPages * PAGE_SIZE, timestamp);
+        printCount(CounterGroup::Memory, "mm_page_alloc", currentKmemPages * PAGE_SIZE, timestamp);
     }
 
     void pageFree(uint32_t order, int64_t timestamp)
     {
         currentKmemPages -= pow(2, order);
-        printCount("mm_page_alloc", currentKmemPages * PAGE_SIZE, timestamp);
+        printCount(CounterGroup::Memory, "mm_page_alloc", currentKmemPages * PAGE_SIZE, timestamp);
     }
 
     // swapper is the idle process on linux
@@ -263,14 +263,14 @@ struct Context
         const bool wasRunning = cpuRunning[cpuId];
         const bool isRunning = nextTid != SWAPPER_TID;
         if (wasRunning != isRunning) {
-            printCount("CPU utilization", std::count(cpuRunning.begin(), cpuRunning.end(), true), timestamp);
+            printCount(CounterGroup::CPU, "CPU utilization", std::count(cpuRunning.begin(), cpuRunning.end(), true), timestamp);
             cpuRunning[cpuId] = isRunning;
         }
     }
 
     void cpuFrequency(uint64_t cpuId, uint64_t frequency, int64_t timestamp)
     {
-        printCount("CPU " + std::to_string(cpuId) + " frequency", frequency, timestamp);
+        printCount(CounterGroup::CPU, "CPU " + std::to_string(cpuId) + " frequency", frequency, timestamp);
     }
 
     bool isFiltered(std::string_view name) const
@@ -336,24 +336,47 @@ private:
     void printCount(KMemType type, int64_t timestamp)
     {
         const auto &current = type == KMalloc ? currentAlloc : currentCached;
-        printCount(type == KMalloc ? "kmem_kmalloc_requested" : "kmem_cache_alloc_requested", current.requested, timestamp);
-        printCount(type == KMalloc ? "kmem_kmalloc_allocated" : "kmem_cache_alloc_allocated", current.allocated, timestamp);
+        printCount(CounterGroup::Memory, type == KMalloc ? "kmem_kmalloc_requested" : "kmem_cache_alloc_requested",
+                   current.requested, timestamp);
+        printCount(CounterGroup::Memory, type == KMalloc ? "kmem_kmalloc_allocated" : "kmem_cache_alloc_allocated",
+                   current.allocated, timestamp);
     }
 
-    void printCount(std::string_view name, int64_t value, int64_t timestamp)
+    enum class CounterGroup {
+        CPU,
+        Memory,
+    };
+    void printCount(CounterGroup counterGroup, std::string_view name, int64_t value, int64_t timestamp)
     {
         if (isFiltered(name))
             return;
 
-        count(name, "Counter");
+        struct GroupData {
+            const char* const name;
+            const int64_t id;
+            bool firstCount;
+        };
+        static GroupData groups[] = {
+            {"CPU statistics", -2, true},
+            {"Memory statistics", -3, true},
+        };
+        const auto groupIndex = static_cast<std::underlying_type_t<CounterGroup>>(counterGroup);
+        auto &group = groups[groupIndex];
+        const auto groupId = group.id;
+        const auto groupName = group.name;
+        auto &firstCount = group.firstCount;
+
+        count(name, groupName);
 
         if (firstCount) {
-            printEvent(R"({"name": "process_sort_index", "ph": "M", "pid": -2, "tid": -2, "args": { "sort_index": -1 }})");
-            printEvent(R"({"name": "process_name", "ph": "M", "pid": -2, "tid": -2, "args": { "name": "kernel statistics" }})");
+            printEvent(R"({"name": "process_sort_index", "ph": "M", "pid": %1$ld, "tid": %1$ld, "args": { "sort_index": %1$ld }})",
+                       groupId);
+            printEvent(R"({"name": "process_name", "ph": "M", "pid": %1$ld, "tid": %1$ld, "args": { "name": "%2$s" }})",
+                       groupId, groupName);
             firstCount = false;
         }
-        printEvent(R"({"name": "%.*s", "ph": "C", "ts": %lu, "pid": -2, "tid": -2, "args": {"value": %ld}})",
-                   name.size(), name.data(), timestamp, value);
+        printEvent(R"({"name": "%.*s", "ph": "C", "ts": %lu, "pid": %ld, "tid": %ld, "args": {"value": %ld}})",
+                   name.size(), name.data(), timestamp, groupId, groupId, value);
     }
 
     std::vector<int64_t> cpuToTid;
@@ -366,7 +389,6 @@ private:
     uint64_t currentKmemPages = 0;
     std::vector<bool> cpuRunning;
     bool firstEvent = true;
-    bool firstCount = true;
     struct EventStats
     {
         std::string name;
