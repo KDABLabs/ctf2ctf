@@ -150,6 +150,7 @@ struct Context
         : options(std::move(options))
     {
         cores.reserve(32);
+        pids.reserve(1024);
         tids.reserve(1024);
         argsBuffer.reserve(1024);
     }
@@ -177,6 +178,33 @@ struct Context
     void setPid(int64_t tid, int64_t pid)
     {
         tids[tid].pid = pid;
+    }
+
+    void setOpenAtFilename(int64_t tid, std::string_view filename)
+    {
+        tids[tid].openAtFilename = filename;
+    }
+
+    void setOpenAtFd(int64_t pid, int64_t tid, int64_t fd)
+    {
+        pids[pid].fdToFilename[fd] = std::move(tids[tid].openAtFilename);
+    }
+
+    void setFdFilename(int64_t pid, int64_t fd, std::string_view filename)
+    {
+        pids[pid].fdToFilename[fd] = filename;
+    }
+
+    std::string_view fdToFilename(int64_t pid, int64_t fd) const
+    {
+        auto pid_it = pids.find(pid);
+        if (pid_it == pids.end())
+            return "??";
+        const auto& fds = pid_it->second.fdToFilename;
+        auto fd_it = fds.find(fd);
+        if (fd_it == fds.end())
+            return "??";
+        return fd_it->second;
     }
 
     void printName(int64_t tid, int64_t pid, std::string_view name, int64_t timestamp)
@@ -434,8 +462,14 @@ private:
     {
         int64_t pid = INVALID_TID;
         std::string name;
+        std::string openAtFilename;
     };
     std::unordered_map<int64_t, TidData> tids;
+    struct PidData
+    {
+        std::unordered_map<int64_t, std::string> fdToFilename;
+    };
+    std::unordered_map<int64_t, PidData> pids;
     std::unordered_map<uint64_t, KMemAlloc> kmem;
     std::unordered_map<uint64_t, KMemAlloc> kmemCached;
     KMemAlloc currentAlloc;
@@ -511,6 +545,11 @@ struct Event
 
             const auto name = get_char_array(event, event_fields_scope, "name").value();
             context->printName(vtid, vpid, name, timestamp);
+        } else if (name == "lttng_statedump_file_descriptor") {
+            const auto pid = get_int64(event, event_fields_scope, "pid").value();
+            const auto fd = get_int64(event, event_fields_scope, "fd").value();
+            const auto filename = get_string(event, event_fields_scope, "filename").value();
+            context->setFdFilename(pid, fd, filename);
         } else if (name == "sched_process_exec") {
             const auto tid = get_int64(event, event_fields_scope, "tid").value();
             const auto pid = context->pid(tid);
@@ -705,8 +744,9 @@ void fillArgs(const bt_ctf_event* event, const bt_definition* scope, ValueFormat
 
 struct Formatter
 {
-    Formatter(std::string* buffer, const Event* event)
+    Formatter(std::string* buffer, Context* context, const Event* event)
         : buffer(buffer)
+        , context(context)
         , event(event)
     {
     }
@@ -715,18 +755,31 @@ struct Formatter
     {
         newField(field);
         *buffer += std::to_string(value);
+
+        if (field == "fd" && event->category == "syscall") {
+            (*this)("file", context->fdToFilename(event->pid, value));
+        } else if (field == "ret" && event->name == "syscall_openat") {
+            context->setOpenAtFd(event->pid, event->tid, value);
+        }
     }
 
     void operator()(std::string_view field, uint64_t value)
     {
         newField(field);
         *buffer += std::to_string(value);
+
+        if (field == "fd" && event->category == "syscall") {
+            (*this)("file", context->fdToFilename(event->pid, static_cast<int64_t>(value)));
+        }
     }
 
     void operator()(std::string_view field, std::string_view value)
     {
         newField(field);
         writeString(value);
+        if (event->name == "syscall_openat" && field == "filename") {
+            context->setOpenAtFilename(event->tid, value);
+        }
     }
 
     void operator()(std::string_view field, ArgError error, int64_t arg = 0)
@@ -843,6 +896,7 @@ struct Formatter
     }
 
     std::string* buffer;
+    Context* context;
     const Event* event;
 };
 
@@ -857,7 +911,7 @@ void Context::parseEvent(bt_ctf_event* ctf_event)
 
     argsBuffer.clear();
     if (event.event_fields_scope)
-        fillArgs(ctf_event, event.event_fields_scope, Formatter(&argsBuffer, &event));
+        fillArgs(ctf_event, event.event_fields_scope, Formatter(&argsBuffer, this, &event));
 
     if (event.category.empty()) {
         printEvent(R"({"name": "%.*s", "ph": "%c", "ts": %lu, "pid": %ld, "tid": %ld, "args": {%s}})",
