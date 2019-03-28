@@ -1,5 +1,5 @@
 /*
-  lttng_to_chrome.cpp
+  ctf2ctf.cpp
 
   This file is part of ctf2ctf, a converter from LTTng/CTF to Chromium's Common Trace Format.
 
