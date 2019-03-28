@@ -1,6 +1,20 @@
 cmake_minimum_required(VERSION 3.0)
 project(lttng_to_chrome VERSION 0.1)
 
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/args/args.hxx" )
+    if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
+        message( FATAL_ERROR
+            "The args git submodule is not initialized.\n"
+            "Please run the following commands in the source directory (${PROJECT_SOURCE_DIR}):\n"
+            "    git submodule update --init --recursive\n"
+        )
+    else()
+        message( FATAL_ERROR
+            "The args submodule is missing - please report a broken source package.\n"
+        )
+    endif()
+endif()
+
 if(NOT CMAKE_BUILD_TYPE)
   message(STATUS "Setting build type to 'RelWithDebInfo' as none was specified.")
   set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Choose the type of build." FORCE)
