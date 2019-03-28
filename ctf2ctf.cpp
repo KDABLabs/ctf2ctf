@@ -159,6 +159,7 @@ struct Context
         cores.reserve(32);
         pids.reserve(1024);
         tids.reserve(1024);
+        irqs.reserve(32);
     }
 
     int64_t tid(uint64_t cpuId) const
@@ -211,6 +212,24 @@ struct Context
         if (fd_it == fds.end())
             return "??";
         return fd_it->second;
+    }
+
+    void setIrqName(uint64_t irq, std::string_view name, std::string_view action)
+    {
+        irqs[irq] = {std::string(name), std::string(action)};
+    }
+
+    struct IrqDataView
+    {
+        std::string_view name;
+        std::string_view action;
+    };
+    IrqDataView irq(uint64_t irq) const
+    {
+        auto it = irqs.find(irq);
+        if (it == irqs.end())
+            return {};
+        return {it->second.name, it->second.action};
     }
 
     void printName(int64_t tid, int64_t pid, std::string_view name, int64_t timestamp)
@@ -476,6 +495,12 @@ private:
         std::unordered_map<int64_t, std::string> fdToFilename;
     };
     std::unordered_map<int64_t, PidData> pids;
+    struct IrqData
+    {
+        std::string name;
+        std::string action;
+    };
+    std::unordered_map<uint64_t, IrqData> irqs;
     std::unordered_map<uint64_t, KMemAlloc> kmem;
     std::unordered_map<uint64_t, KMemAlloc> kmemCached;
     KMemAlloc currentAlloc;
@@ -551,6 +576,11 @@ struct Event
 
             const auto name = get_char_array(event, event_fields_scope, "name").value();
             context->printName(vtid, vpid, name, timestamp);
+        } else if (name == "lttng_statedump_interrupt") {
+            const auto irq = get_uint64(event, event_fields_scope, "irq").value();
+            const auto name = get_string(event, event_fields_scope, "name").value();
+            const auto action = get_string(event, event_fields_scope, "action").value();
+            context->setIrqName(irq, name, action);
         } else if (name == "lttng_statedump_file_descriptor") {
             const auto pid = get_int64(event, event_fields_scope, "pid").value();
             const auto fd = get_int64(event, event_fields_scope, "fd").value();
@@ -804,6 +834,10 @@ struct Formatter
 
         if (field == "fd" && event->category == "syscall") {
             (*this)("file", context->fdToFilename(event->pid, static_cast<int64_t>(value)));
+        } else if (event->category == "irq" && field == "vec") {
+            const auto& irq = context->irq(value);
+            (*this)("name", irq.name);
+            (*this)("action", irq.action);
         }
     }
 
