@@ -151,6 +151,7 @@ struct Context
     {
         cores.reserve(32);
         tids.reserve(1024);
+        argsBuffer.reserve(1024);
     }
 
     int64_t tid(uint64_t cpuId) const
@@ -454,12 +455,15 @@ private:
         uint64_t counter = 0;
     };
     std::vector<CategoryStats> categoryStats;
+    std::string argsBuffer;
 };
 
 struct Event
 {
     Event(bt_ctf_event* event, Context* context)
-        : name(bt_ctf_event_name(event))
+        : ctf_event(event)
+        , event_fields_scope(bt_ctf_get_top_level_scope(event, BT_EVENT_FIELDS))
+        , name(bt_ctf_event_name(event))
         , timestamp(bt_ctf_get_timestamp(event))
     {
         auto stream_packet_context_scope = bt_ctf_get_top_level_scope(event, BT_STREAM_PACKET_CONTEXT);
@@ -471,9 +475,10 @@ struct Event
         tid = context->tid(cpuId);
         pid = context->pid(tid);
 
-        auto event_fields_scope = bt_ctf_get_top_level_scope(event, BT_EVENT_FIELDS);
-        if (!event_fields_scope)
+        if (!event_fields_scope) {
             fprintf(stderr, "failed to get event fields scope\n");
+            return;
+        }
 
         if (name == "sched_switch") {
             const auto next_tid = get_int64(event, event_fields_scope, "next_tid").value();
@@ -602,6 +607,8 @@ struct Event
         }
     }
 
+    const bt_ctf_event* ctf_event = nullptr;
+    const bt_definition* event_fields_scope = nullptr;
     std::string_view name;
     // when we rewrite the name, this is the source for the string_view
     std::string mutatedName;
@@ -613,6 +620,232 @@ struct Event
     char type = 'i';
 };
 
+enum class ArgError
+{
+    UnknownType,
+    UnknownSignedness,
+    UnhandledArrayType,
+    UnhandledType,
+};
+
+template<typename ValueFormatter>
+void addArg(const bt_ctf_event* event, const bt_declaration* decl, const bt_definition* def, ValueFormatter&& formatter)
+{
+    const auto type = bt_ctf_field_type(decl);
+    const auto field_name = bt_ctf_field_name(def);
+
+    // skip sequence lengths
+    if (type == CTF_TYPE_INTEGER && startsWith(field_name, "_") && endsWith(field_name, "_length"))
+        return;
+
+    switch (type) {
+    case CTF_TYPE_UNKNOWN:
+        formatter(field_name, ArgError::UnknownType);
+        break;
+    case CTF_TYPE_INTEGER:
+        switch (bt_ctf_get_int_signedness(decl)) {
+        case 0:
+            formatter(field_name, bt_ctf_get_uint64(def));
+            break;
+        case 1:
+            formatter(field_name, bt_ctf_get_int64(def));
+            break;
+        default:
+            formatter(field_name, ArgError::UnknownSignedness);
+            break;
+        }
+        break;
+    case CTF_TYPE_STRING:
+        formatter(field_name, bt_ctf_get_string(def));
+        break;
+    case CTF_TYPE_ARRAY: {
+        const auto encoding = bt_ctf_get_encoding(decl);
+        if (encoding != CTF_STRING_ASCII && encoding != CTF_STRING_UTF8) {
+            formatter(field_name, ArgError::UnhandledArrayType, encoding);
+        } else {
+            formatter(field_name, bt_ctf_get_char_array(def));
+        }
+        break;
+    }
+    case CTF_TYPE_SEQUENCE: {
+        unsigned int numEntries = 0;
+        const bt_definition* const* sequence = nullptr;
+        if (bt_ctf_get_field_list(event, def, &sequence, &numEntries) != 0 || numEntries == 0) {
+            // empty sequence, skip
+            return;
+        }
+        formatter(field_name, sequence, numEntries);
+        break;
+    }
+    default:
+        formatter(field_name, ArgError::UnhandledType, type);
+        break;
+    }
+}
+
+template<typename ValueFormatter>
+void fillArgs(const bt_ctf_event* event, const bt_definition* scope, ValueFormatter&& formatter)
+{
+    unsigned int fields = 0;
+    const bt_definition* const* list = nullptr;
+    if (bt_ctf_get_field_list(event, scope, &list, &fields) != 0) {
+        fprintf(stderr, "failed to read field list\n");
+        return;
+    }
+    for (unsigned int i = 0; i < fields; ++i) {
+        auto def = list[i];
+        auto decl = bt_ctf_get_decl_from_def(def);
+        if (!decl) {
+            fprintf(stderr, "invalid declaration for field %u\n", i);
+            continue;
+        }
+        addArg(event, decl, def, formatter);
+    }
+}
+
+struct Formatter
+{
+    Formatter(std::string* buffer, const Event* event)
+        : buffer(buffer)
+        , event(event)
+    {
+    }
+
+    void operator()(std::string_view field, int64_t value)
+    {
+        newField(field);
+        *buffer += std::to_string(value);
+    }
+
+    void operator()(std::string_view field, uint64_t value)
+    {
+        newField(field);
+        *buffer += std::to_string(value);
+    }
+
+    void operator()(std::string_view field, std::string_view value)
+    {
+        newField(field);
+        writeString(value);
+    }
+
+    void operator()(std::string_view field, ArgError error, int64_t arg = 0)
+    {
+        newField(field);
+        switch (error) {
+        case ArgError::UnknownType:
+            *buffer += "\"<unknown type>\"";
+            break;
+        case ArgError::UnknownSignedness:
+            *buffer += "\"<unknown signedness>\"";
+            break;
+        case ArgError::UnhandledArrayType:
+            *buffer += "\"<unhandled array type " + std::to_string(arg) + ">\"";
+            break;
+        case ArgError::UnhandledType:
+            *buffer += "\"<unhandled type " + std::to_string(arg) + ">\"";
+            break;
+        }
+    }
+
+    void operator()(std::string_view field, const bt_definition* const* sequence, unsigned numEntries)
+    {
+        if (startsWith(event->category, "qt")) {
+            std::string string;
+            for (unsigned i = 0; i < numEntries; ++i) {
+                const auto* def = sequence[i];
+                const auto* decl = bt_ctf_get_decl_from_def(def);
+                const auto type = bt_ctf_field_type(decl);
+                if (type != CTF_TYPE_INTEGER) {
+                    std::cerr << "unexpected sequence type for qt tracepoint " << field << ": " << type << std::endl;
+                    break;
+                }
+                const auto signedness = bt_ctf_get_int_signedness(decl);
+                if (signedness != 0) {
+                    std::cerr << "unexpected sequence signedness for qt tracepoint " << field << ": " << signedness
+                              << std::endl;
+                    break;
+                }
+                // TODO: convert utf16 to utf8
+                string.push_back(static_cast<char>(bt_ctf_get_uint64(def)));
+            }
+            (*this)(field, string);
+            return;
+        }
+
+        newField(field);
+        *buffer += '[';
+        for (unsigned i = 0; i < numEntries; ++i) {
+            const auto* def = sequence[i];
+            const auto* decl = bt_ctf_get_decl_from_def(def);
+            const auto type = bt_ctf_field_type(decl);
+
+            if (i > 0)
+                *buffer += ", ";
+
+            switch (type) {
+            case CTF_TYPE_UNKNOWN:
+                *buffer += "\"<unknown type>\"";
+                break;
+            case CTF_TYPE_INTEGER:
+                switch (bt_ctf_get_int_signedness(decl)) {
+                case 0:
+                    *buffer += std::to_string(bt_ctf_get_uint64(def));
+                    break;
+                case 1:
+                    *buffer += std::to_string(bt_ctf_get_int64(def));
+                    break;
+                default:
+                    *buffer += "\"<unknown integer signedness>\"";
+                    break;
+                }
+                break;
+            case CTF_TYPE_STRING:
+                writeString(bt_ctf_get_string(def));
+                break;
+            case CTF_TYPE_ARRAY: {
+                const auto encoding = bt_ctf_get_encoding(decl);
+                if (encoding != CTF_STRING_ASCII && encoding != CTF_STRING_UTF8) {
+                    *buffer += "\"<unhandled array type " + std::to_string(encoding) + ">\"";
+                } else {
+                    writeString(bt_ctf_get_char_array(def));
+                }
+                break;
+            }
+            default:
+                *buffer += "\"<unhandled type " + std::to_string(type) + ">\"";
+                break;
+            }
+        }
+        *buffer += ']';
+    }
+
+    void newField(std::string_view field)
+    {
+        if (!buffer->empty())
+            *buffer += ", ";
+        writeString(field);
+        *buffer += ": ";
+    }
+
+    void writeString(std::string_view string)
+    {
+        *buffer += '"';
+        for (auto c : string) {
+            if (c == '\\')
+                *buffer += "\\\\";
+            else if (c == '"')
+                *buffer += "\\\"";
+            else
+                *buffer += c;
+        }
+        *buffer += '"';
+    }
+
+    std::string* buffer;
+    const Event* event;
+};
+
 void Context::parseEvent(bt_ctf_event* ctf_event)
 {
     const auto event = Event(ctf_event, this);
@@ -622,13 +855,18 @@ void Context::parseEvent(bt_ctf_event* ctf_event)
     if (isFiltered(event.name) || isFilteredByPid(event.pid))
         return;
 
+    argsBuffer.clear();
+    if (event.event_fields_scope)
+        fillArgs(ctf_event, event.event_fields_scope, Formatter(&argsBuffer, &event));
+
     if (event.category.empty()) {
-        printEvent(R"({"name": "%.*s", "ph": "%c", "ts": %lu, "pid": %ld, "tid": %ld})", event.name.size(),
-                   event.name.data(), event.type, event.timestamp, event.pid, event.tid);
-    } else {
-        printEvent(R"({"name": "%.*s", "ph": "%c", "ts": %lu, "pid": %ld, "tid": %ld, "cat": "%.*s"})",
+        printEvent(R"({"name": "%.*s", "ph": "%c", "ts": %lu, "pid": %ld, "tid": %ld, "args": {%s}})",
                    event.name.size(), event.name.data(), event.type, event.timestamp, event.pid, event.tid,
-                   event.category.size(), event.category.data());
+                   argsBuffer.c_str());
+    } else {
+        printEvent(R"({"name": "%.*s", "ph": "%c", "ts": %lu, "pid": %ld, "tid": %ld, "cat": "%.*s", "args": {%s}})",
+                   event.name.size(), event.name.data(), event.type, event.timestamp, event.pid, event.tid,
+                   event.category.size(), event.category.data(), argsBuffer.c_str());
     }
 }
 
