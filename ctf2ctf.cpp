@@ -26,29 +26,29 @@
 */
 
 #include <babeltrace/babeltrace.h>
-#include <babeltrace/ctf/iterator.h>
 #include <babeltrace/ctf/events.h>
+#include <babeltrace/ctf/iterator.h>
 
-#include <memory>
-#include <type_traits>
-#include <string>
-#include <vector>
-#include <unordered_map>
-#include <string_view>
-#include <optional>
-#include <cstdio>
-#include <cmath>
-#include <filesystem>
-#include <iostream>
-#include <iomanip>
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <filesystem>
+#include <iomanip>
+#include <iostream>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <type_traits>
+#include <unordered_map>
+#include <vector>
 
 #include "clioptions.h"
 
 template<typename Callback>
-void findMetadataFiles(const std::filesystem::path &path, Callback &&callback)
+void findMetadataFiles(const std::filesystem::path& path, Callback&& callback)
 {
-    for (const auto &entry : std::filesystem::recursive_directory_iterator(path)) {
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(path)) {
         if (entry.is_regular_file() && entry.path().filename() == "metadata")
             callback(entry.path().parent_path().c_str());
     }
@@ -61,7 +61,7 @@ auto wrap(T* value, Cleanup cleanup)
 }
 
 template<typename Reader>
-auto get(const bt_ctf_event *event, const bt_definition *scope, const char* name, Reader reader)
+auto get(const bt_ctf_event* event, const bt_definition* scope, const char* name, Reader reader)
 {
     auto definition = bt_ctf_get_field(event, scope, name);
     auto ret = std::optional<std::invoke_result_t<Reader, decltype(definition)>>();
@@ -70,22 +70,22 @@ auto get(const bt_ctf_event *event, const bt_definition *scope, const char* name
     return ret;
 }
 
-auto get_uint64(const bt_ctf_event *event, const bt_definition *scope, const char* name)
+auto get_uint64(const bt_ctf_event* event, const bt_definition* scope, const char* name)
 {
     return get(event, scope, name, bt_ctf_get_uint64);
 }
 
-auto get_int64(const bt_ctf_event *event, const bt_definition *scope, const char* name)
+auto get_int64(const bt_ctf_event* event, const bt_definition* scope, const char* name)
 {
     return get(event, scope, name, bt_ctf_get_int64);
 }
 
-auto get_char_array(const bt_ctf_event *event, const bt_definition *scope, const char* name)
+auto get_char_array(const bt_ctf_event* event, const bt_definition* scope, const char* name)
 {
     return get(event, scope, name, bt_ctf_get_char_array);
 }
 
-auto get_string(const bt_ctf_event *event, const bt_definition *scope, const char* name)
+auto get_string(const bt_ctf_event* event, const bt_definition* scope, const char* name)
 {
     return get(event, scope, name, bt_ctf_get_string);
 }
@@ -101,13 +101,13 @@ bool endsWith(std::string_view string, std::string_view suffix)
 }
 
 template<typename Whitelist, typename Needle>
-bool contains(const Whitelist &whitelist, const Needle &needle)
+bool contains(const Whitelist& whitelist, const Needle& needle)
 {
     return std::find(whitelist.begin(), whitelist.end(), needle) != whitelist.end();
 }
 
 template<typename Whitelist, typename Needle>
-bool isWhitelisted(const Whitelist &whitelist, const Needle &needle)
+bool isWhitelisted(const Whitelist& whitelist, const Needle& needle)
 {
     return whitelist.empty() || contains(whitelist, needle);
 }
@@ -118,23 +118,23 @@ struct KMemAlloc
     uint64_t allocated = 0;
 };
 
-KMemAlloc operator+(const KMemAlloc &lhs, const KMemAlloc &rhs)
+KMemAlloc operator+(const KMemAlloc& lhs, const KMemAlloc& rhs)
 {
     return {lhs.requested + rhs.requested, lhs.allocated + rhs.allocated};
 }
 
-KMemAlloc operator-(const KMemAlloc &lhs, const KMemAlloc &rhs)
+KMemAlloc operator-(const KMemAlloc& lhs, const KMemAlloc& rhs)
 {
     return {lhs.requested - rhs.requested, lhs.allocated - rhs.allocated};
 }
 
-KMemAlloc& operator+=(KMemAlloc &lhs, const KMemAlloc &rhs)
+KMemAlloc& operator+=(KMemAlloc& lhs, const KMemAlloc& rhs)
 {
     lhs = lhs + rhs;
     return lhs;
 }
 
-KMemAlloc& operator-=(KMemAlloc &lhs, const KMemAlloc &rhs)
+KMemAlloc& operator-=(KMemAlloc& lhs, const KMemAlloc& rhs)
 {
     lhs = lhs - rhs;
     return lhs;
@@ -192,8 +192,7 @@ struct Context
         if (isFilteredByPid(pid))
             return;
 
-        auto printName = [this, tid, pid, name, timestamp](const char *type)
-        {
+        auto printName = [this, tid, pid, name, timestamp](const char* type) {
             printEvent(R"({"name": "%s", "ph": "M", "ts": %ld, "pid": %ld, "tid": %ld, "args": {"name": "%.*s"}})",
                        type, timestamp, pid, tid, name.size(), name.data());
         };
@@ -202,7 +201,7 @@ struct Context
         printName("thread_name");
     }
 
-    template<typename ...T>
+    template<typename... T>
     void printEvent(const char* fmt, T... args)
     {
         if (!firstEvent)
@@ -214,16 +213,17 @@ struct Context
         printf(fmt, args...);
     }
 
-    void parseEvent(bt_ctf_event *event);
+    void parseEvent(bt_ctf_event* event);
 
-    enum KMemType {
+    enum KMemType
+    {
         KMalloc,
         CacheAlloc,
     };
-    void alloc(uint64_t ptr, const KMemAlloc &alloc, int64_t timestamp, KMemType type)
+    void alloc(uint64_t ptr, const KMemAlloc& alloc, int64_t timestamp, KMemType type)
     {
-        auto &hash = type == KMalloc ? kmem : kmemCached;
-        auto &current = type == KMalloc ? currentAlloc : currentCached;
+        auto& hash = type == KMalloc ? kmem : kmemCached;
+        auto& current = type == KMalloc ? currentAlloc : currentCached;
         hash[ptr] = alloc;
         current += alloc;
         printCount(type, timestamp);
@@ -231,8 +231,8 @@ struct Context
 
     void free(uint64_t ptr, int64_t timestamp, KMemType type)
     {
-        auto &hash = type == KMalloc ? kmem : kmemCached;
-        auto &current = type == KMalloc ? currentAlloc : currentCached;
+        auto& hash = type == KMalloc ? kmem : kmemCached;
+        auto& current = type == KMalloc ? currentAlloc : currentCached;
         current -= hash[ptr];
         printCount(type, timestamp);
     }
@@ -263,7 +263,8 @@ struct Context
         const bool wasRunning = cpuRunning[cpuId];
         const bool isRunning = nextTid != SWAPPER_TID;
         if (wasRunning != isRunning) {
-            printCount(CounterGroup::CPU, "CPU utilization", std::count(cpuRunning.begin(), cpuRunning.end(), true), timestamp);
+            printCount(CounterGroup::CPU, "CPU utilization", std::count(cpuRunning.begin(), cpuRunning.end(), true),
+                       timestamp);
             cpuRunning[cpuId] = isRunning;
         }
     }
@@ -275,9 +276,8 @@ struct Context
 
     bool isFiltered(std::string_view name) const
     {
-        return std::any_of(options.exclude.begin(), options.exclude.end(), [name](const auto &pattern) {
-            return name.find(pattern) != name.npos;
-        });
+        return std::any_of(options.exclude.begin(), options.exclude.end(),
+                           [name](const auto& pattern) { return name.find(pattern) != name.npos; });
     }
 
     bool isFilteredByPid(int64_t pid) const
@@ -292,19 +292,18 @@ struct Context
         return !isWhitelisted(options.processWhitelist, name);
     }
 
-    void printStats(std::ostream &out) const
+    void printStats(std::ostream& out) const
     {
         if (!options.enableStatistics)
             return;
 
         out << "Trace Data Statistics:\n\n";
 
-        auto printSortedStats = [&out](const auto &stats) {
+        auto printSortedStats = [&out](const auto& stats) {
             auto sortedStats = stats;
-            std::sort(sortedStats.begin(), sortedStats.end(), [](const auto &lhs, const auto &rhs) {
-                return lhs.counter < rhs.counter;
-            });
-            for (const auto &entry : sortedStats)
+            std::sort(sortedStats.begin(), sortedStats.end(),
+                      [](const auto& lhs, const auto& rhs) { return lhs.counter < rhs.counter; });
+            for (const auto& entry : sortedStats)
                 out << std::setw(16) << entry.counter << '\t' << entry.name << '\n';
         };
 
@@ -321,10 +320,9 @@ private:
         if (!options.enableStatistics)
             return;
 
-        auto count = [](auto &stats, auto name) {
-            auto it = std::lower_bound(stats.begin(), stats.end(), name, [](const auto &entry, const auto &name) {
-                return entry.name < name;
-            });
+        auto count = [](auto& stats, auto name) {
+            auto it = std::lower_bound(stats.begin(), stats.end(), name,
+                                       [](const auto& entry, const auto& name) { return entry.name < name; });
             if (it == stats.end() || it->name != name)
                 it = stats.insert(it, {std::string(name)});
             it->counter++;
@@ -335,14 +333,15 @@ private:
 
     void printCount(KMemType type, int64_t timestamp)
     {
-        const auto &current = type == KMalloc ? currentAlloc : currentCached;
+        const auto& current = type == KMalloc ? currentAlloc : currentCached;
         printCount(CounterGroup::Memory, type == KMalloc ? "kmem_kmalloc_requested" : "kmem_cache_alloc_requested",
                    current.requested, timestamp);
         printCount(CounterGroup::Memory, type == KMalloc ? "kmem_kmalloc_allocated" : "kmem_cache_alloc_allocated",
                    current.allocated, timestamp);
     }
 
-    enum class CounterGroup {
+    enum class CounterGroup
+    {
         CPU,
         Memory,
     };
@@ -351,7 +350,8 @@ private:
         if (isFiltered(name))
             return;
 
-        struct GroupData {
+        struct GroupData
+        {
             const char* const name;
             const int64_t id;
             bool firstCount;
@@ -361,16 +361,17 @@ private:
             {"Memory statistics", -3, true},
         };
         const auto groupIndex = static_cast<std::underlying_type_t<CounterGroup>>(counterGroup);
-        auto &group = groups[groupIndex];
+        auto& group = groups[groupIndex];
         const auto groupId = group.id;
         const auto groupName = group.name;
-        auto &firstCount = group.firstCount;
+        auto& firstCount = group.firstCount;
 
         count(name, groupName);
 
         if (firstCount) {
-            printEvent(R"({"name": "process_sort_index", "ph": "M", "pid": %1$ld, "tid": %1$ld, "args": { "sort_index": %1$ld }})",
-                       groupId);
+            printEvent(
+                R"({"name": "process_sort_index", "ph": "M", "pid": %1$ld, "tid": %1$ld, "args": { "sort_index": %1$ld }})",
+                groupId);
             printEvent(R"({"name": "process_name", "ph": "M", "pid": %1$ld, "tid": %1$ld, "args": { "name": "%2$s" }})",
                        groupId, groupName);
             firstCount = false;
@@ -405,7 +406,7 @@ private:
 
 struct Event
 {
-    Event(bt_ctf_event *event, Context *context)
+    Event(bt_ctf_event* event, Context* context)
         : name(bt_ctf_event_name(event))
         , timestamp(bt_ctf_get_timestamp(event))
     {
@@ -483,16 +484,14 @@ struct Event
             context->pageFree(order, timestamp);
         }
 
-        auto removeSuffix = [this](std::string_view suffix)
-        {
+        auto removeSuffix = [this](std::string_view suffix) {
             if (!endsWith(name, suffix))
                 return false;
             name.remove_suffix(suffix.length());
             return true;
         };
 
-        auto rewriteName = [this](std::string_view needle, std::string_view replacement, bool atStart)
-        {
+        auto rewriteName = [this](std::string_view needle, std::string_view replacement, bool atStart) {
             const auto pos = atStart ? 0 : name.find(needle);
 
             if (atStart && !startsWith(name, needle))
@@ -506,9 +505,11 @@ struct Event
             return true;
         };
 
-        if (removeSuffix("_entry") || rewriteName("syscall_entry_", "syscall_", true) || rewriteName("_begin_", "_", false) || rewriteName("_before_", "_", false))
+        if (removeSuffix("_entry") || rewriteName("syscall_entry_", "syscall_", true)
+            || rewriteName("_begin_", "_", false) || rewriteName("_before_", "_", false))
             type = 'B';
-        else if (removeSuffix("_exit") || rewriteName("syscall_exit_", "syscall_", true) || rewriteName("_end_", "_", false) || rewriteName("_after_", "_", false))
+        else if (removeSuffix("_exit") || rewriteName("syscall_exit_", "syscall_", true)
+                 || rewriteName("_end_", "_", false) || rewriteName("_after_", "_", false))
             type = 'E';
 
         // TODO: also parse /sys/kernel/debug/tracing/available_events if accessible
@@ -570,8 +571,8 @@ void Context::parseEvent(bt_ctf_event* ctf_event)
         return;
 
     if (event.category.empty()) {
-        printEvent(R"({"name": "%.*s", "ph": "%c", "ts": %lu, "pid": %ld, "tid": %ld})",
-                   event.name.size(), event.name.data(), event.type, event.timestamp, event.pid, event.tid);
+        printEvent(R"({"name": "%.*s", "ph": "%c", "ts": %lu, "pid": %ld, "tid": %ld})", event.name.size(),
+                   event.name.data(), event.type, event.timestamp, event.pid, event.tid);
     } else {
         printEvent(R"({"name": "%.*s", "ph": "%c", "ts": %lu, "pid": %ld, "tid": %ld, "cat": "%.*s"})",
                    event.name.size(), event.name.data(), event.type, event.timestamp, event.pid, event.tid,
@@ -579,14 +580,14 @@ void Context::parseEvent(bt_ctf_event* ctf_event)
     }
 }
 
-int main(int argc, char **argv)
+int main(int argc, char** argv)
 {
     Context context(parseCliOptions(argc, argv));
 
     auto ctx = wrap(bt_context_create(), bt_context_put);
 
     bool hasTrace = false;
-    findMetadataFiles(context.options.path, [&ctx, &hasTrace](const char *path) {
+    findMetadataFiles(context.options.path, [&ctx, &hasTrace](const char* path) {
         auto trace_id = bt_context_add_trace(ctx.get(), path, "ctf", nullptr, nullptr, nullptr);
         if (trace_id < 0)
             fprintf(stderr, "failed to open trace: %s\n", path);
@@ -612,7 +613,7 @@ int main(int argc, char **argv)
 
         try {
             context.parseEvent(ctf_event);
-        } catch(const std::exception &exception) {
+        } catch (const std::exception& exception) {
             fprintf(stderr, "Failed to parse event: %s\n", exception.what());
         }
     } while (bt_iter_next(bt_ctf_get_iter(iter.get())) == 0);
