@@ -268,20 +268,9 @@ struct Context
         }
     }
 
-    void printCount(std::string_view name, int64_t value, int64_t timestamp)
+    void cpuFrequency(uint64_t cpuId, uint64_t frequency, int64_t timestamp)
     {
-        if (isFiltered(name))
-            return;
-
-        count(name, "Counter");
-
-        if (firstCount) {
-            printEvent(R"({"name": "process_sort_index", "ph": "M", "pid": 0, "tid": 0, "args": { "sort_index": -1 }})");
-            printEvent(R"({"name": "process_name", "ph": "M", "pid": 0, "tid": 0, "args": { "name": "kernel statistics" }})");
-            firstCount = false;
-        }
-        printEvent(R"({"name": "%.*s", "ph": "C", "ts": %lu, "pid": 0, "tid": 0, "args": {"value": %ld}})",
-                   name.size(), name.data(), timestamp, value);
+        printCount("CPU " + std::to_string(cpuId) + " frequency", frequency, timestamp);
     }
 
     bool isFiltered(std::string_view name) const
@@ -349,6 +338,22 @@ private:
         const auto &current = type == KMalloc ? currentAlloc : currentCached;
         printCount(type == KMalloc ? "kmem_kmalloc_requested" : "kmem_cache_alloc_requested", current.requested, timestamp);
         printCount(type == KMalloc ? "kmem_kmalloc_allocated" : "kmem_cache_alloc_allocated", current.allocated, timestamp);
+    }
+
+    void printCount(std::string_view name, int64_t value, int64_t timestamp)
+    {
+        if (isFiltered(name))
+            return;
+
+        count(name, "Counter");
+
+        if (firstCount) {
+            printEvent(R"({"name": "process_sort_index", "ph": "M", "pid": -2, "tid": -2, "args": { "sort_index": -1 }})");
+            printEvent(R"({"name": "process_name", "ph": "M", "pid": -2, "tid": -2, "args": { "name": "kernel statistics" }})");
+            firstCount = false;
+        }
+        printEvent(R"({"name": "%.*s", "ph": "C", "ts": %lu, "pid": -2, "tid": -2, "args": {"value": %ld}})",
+                   name.size(), name.data(), timestamp, value);
     }
 
     std::vector<int64_t> cpuToTid;
@@ -447,7 +452,7 @@ struct Event
             context->free(ptr, timestamp, name == "kmem_kfree" ? Context::KMalloc : Context::CacheAlloc);
         } else if (name == "power_cpu_frequency") {
             const auto state = get_uint64(event, event_fields_scope, "state").value();
-            context->printCount("CPU " + std::to_string(cpuId) + " frequency", state, timestamp);
+            context->cpuFrequency(cpuId, state, timestamp);
         } else if (name == "kmem_mm_page_alloc") {
             const auto order = get_uint64(event, event_fields_scope, "order").value();
             context->pageAlloc(order, timestamp);
