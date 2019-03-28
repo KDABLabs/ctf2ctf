@@ -160,6 +160,7 @@ struct Context
         pids.reserve(1024);
         tids.reserve(1024);
         irqs.reserve(32);
+        blockDevices.reserve(32);
     }
 
     int64_t tid(uint64_t cpuId) const
@@ -230,6 +231,19 @@ struct Context
         if (it == irqs.end())
             return {};
         return {it->second.name, it->second.action};
+    }
+
+    void setBlockDeviceName(uint64_t device, std::string_view name)
+    {
+        blockDevices[device] = name;
+    }
+
+    std::string_view blockDeviceName(uint64_t device) const
+    {
+        auto it = blockDevices.find(device);
+        if (it == blockDevices.end())
+            return "??";
+        return it->second;
     }
 
     void printName(int64_t tid, int64_t pid, std::string_view name, int64_t timestamp)
@@ -501,6 +515,7 @@ private:
         std::string action;
     };
     std::unordered_map<uint64_t, IrqData> irqs;
+    std::unordered_map<uint64_t, std::string> blockDevices;
     std::unordered_map<uint64_t, KMemAlloc> kmem;
     std::unordered_map<uint64_t, KMemAlloc> kmemCached;
     KMemAlloc currentAlloc;
@@ -581,6 +596,10 @@ struct Event
             const auto name = get_string(event, event_fields_scope, "name").value();
             const auto action = get_string(event, event_fields_scope, "action").value();
             context->setIrqName(irq, name, action);
+        } else if (name == "lttng_statedump_block_device") {
+            const auto device = get_uint64(event, event_fields_scope, "dev").value();
+            const auto diskname = get_string(event, event_fields_scope, "diskname").value();
+            context->setBlockDeviceName(device, diskname);
         } else if (name == "lttng_statedump_file_descriptor") {
             const auto pid = get_int64(event, event_fields_scope, "pid").value();
             const auto fd = get_int64(event, event_fields_scope, "fd").value();
@@ -838,6 +857,11 @@ struct Formatter
             const auto& irq = context->irq(value);
             (*this)("name", irq.name);
             (*this)("action", irq.action);
+        } else if (event->category == "block") {
+            if (field == "dev")
+                (*this)("dev_name", context->blockDeviceName(value));
+            else if (field == "old_dev")
+                (*this)("old_dev_name", context->blockDeviceName(value));
         }
     }
 
