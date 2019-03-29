@@ -992,12 +992,17 @@ struct Formatter
         newField(field);
         stream << std::to_string(value);
 
-        if (field == "fd" && value != -1 && event->category == "syscall") {
-            (*this)("file", context->fdToFilename(event->pid, value));
-        } else if (field == "ret" && event->name == "syscall_openat") {
-            context->setOpenAtFd(event->pid, event->tid, value);
-        } else if (field == "ret" && event->name == "syscall_socket") {
-            context->setFdFilename(event->pid, value, "socket");
+        if (event->category == "syscall") {
+            if (field == "fd" && value != -1) {
+                (*this)("file", context->fdToFilename(event->pid, value));
+            } else if (field == "ret") {
+                if (event->name == "syscall_openat")
+                    context->setOpenAtFd(event->pid, event->tid, value);
+                else if (event->name == "syscall_socket")
+                    context->setFdFilename(event->pid, value, "socket");
+                else if (event->name == "syscall_eventfd2")
+                    context->setFdFilename(event->pid, value, "eventfd");
+            }
         }
     }
 
