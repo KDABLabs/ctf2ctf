@@ -349,7 +349,7 @@ struct Context
             return "??";
 
         const auto& mmaps = pid_it->second.mmaps;
-        auto it = findMmapAt(mmaps, pid);
+        auto it = findMmapAt(mmaps, addr);
         if (it == mmaps.end())
             return "??";
         return it->file;
