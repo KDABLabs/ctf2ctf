@@ -27,3 +27,4 @@ and open the `trace.json.gz` file.
   - page fault address to file
   - syscall `fd` to file
 - filter results by process name or process id
+- filter results by time

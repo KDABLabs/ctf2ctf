@@ -42,6 +42,8 @@ CliOptions parseCliOptions(int argc, char** argv)
                                                  {"pid-whitelist"});
     args::ValueFlagList<std::string> processWhitelistArg(parser, "process", "Only show events for this process",
                                                          {"process-whitelist"});
+    args::ValueFlag<double> minTimeArg(parser, "ms", "skip events before this time", {"min-time"});
+    args::ValueFlag<double> maxTimeArg(parser, "ms", "skip events after this time", {"max-time"});
     args::Flag printStatsArg(parser, "stats", "print statistics to stderr", {"print-stats"});
     args::Positional<std::filesystem::path> pathArg(
         parser, "path", "The path to an LTTng trace folder, will be searched recursively for trace data");
@@ -61,6 +63,13 @@ CliOptions parseCliOptions(int argc, char** argv)
         exit(1);
     }
 
-    return {path, args::get(excludeArg), args::get(pidWhitelistArg), args::get(processWhitelistArg),
-            args::get(printStatsArg)};
+    auto toNs = [](double ms) { return static_cast<int64_t>(ms * 1E3); };
+
+    return {path,
+            args::get(excludeArg),
+            args::get(pidWhitelistArg),
+            args::get(processWhitelistArg),
+            args::get(printStatsArg),
+            toNs(args::get(minTimeArg)),
+            toNs(args::get(maxTimeArg))};
 }

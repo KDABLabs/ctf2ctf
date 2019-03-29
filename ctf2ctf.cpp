@@ -473,7 +473,7 @@ struct Context
 
     void schedSwitch(uint64_t cpuId, int64_t prevTid, int64_t nextTid, int64_t timestamp)
     {
-        if (prevTid == nextTid)
+        if (prevTid == nextTid || isFilteredByTime(timestamp))
             return;
 
         if (cores.size() <= cpuId)
@@ -536,6 +536,15 @@ struct Context
         return !isWhitelisted(options.processWhitelist, name);
     }
 
+    bool isFilteredByTime(int64_t timestamp) const
+    {
+        if (options.minTime && timestamp < options.minTime)
+            return true;
+        if (options.maxTime && timestamp > options.maxTime)
+            return true;
+        return false;
+    }
+
     void printStats(std::ostream& out) const
     {
         if (!options.enableStatistics)
@@ -561,7 +570,7 @@ struct Context
 private:
     void anonMmapped(int64_t pid, int64_t timestamp, int64_t fd, uint64_t len, bool add)
     {
-        if (fd != -1 || isFilteredByPid(pid))
+        if (fd != -1 || isFilteredByPid(pid) || isFilteredByTime(timestamp))
             return;
 
         auto& anonMmapped = pids[pid].anonMmapped;
@@ -637,7 +646,7 @@ private:
     }
     void printCount(CounterGroup counterGroup, std::string_view name, int64_t value, int64_t timestamp)
     {
-        if (isFiltered(name))
+        if (isFiltered(name) || isFilteredByTime(timestamp))
             return;
 
         const auto group = dataFor(counterGroup);
@@ -720,6 +729,7 @@ struct Event
         , event_fields_scope(bt_ctf_get_top_level_scope(event, BT_EVENT_FIELDS))
         , name(bt_ctf_event_name(event))
         , timestamp(bt_ctf_get_timestamp(event))
+        , isFilteredByTime(context->isFilteredByTime(timestamp))
     {
         auto stream_packet_context_scope = bt_ctf_get_top_level_scope(event, BT_STREAM_PACKET_CONTEXT);
         if (!stream_packet_context_scope)
@@ -751,12 +761,12 @@ struct Event
             context->schedSwitch(cpuId, prev_tid, next_tid, timestamp);
 
             // TODO: look into flow events?
-            if (!context->isFilteredByPid(prev_tid)) {
+            if (!context->isFilteredByPid(prev_tid) && !isFilteredByTime) {
                 context->printEvent(
                     R"({"name": "sched_switch", "ph": "B", "ts" : %.*g, "pid": %ld, "tid": %ld, "cat": "sched", "args": {"out": {"next_comm": "%s", "next_pid": %ld, "next_tid": %ld}}})",
                     TIMESTAMP_PRECISION, toMs(timestamp), prev_pid, prev_tid, next_comm, next_pid, next_tid);
             }
-            if (!context->isFilteredByPid(next_tid)) {
+            if (!context->isFilteredByPid(next_tid) && !isFilteredByTime) {
                 context->printEvent(
                     R"({"name": "sched_switch", "ph": "E", "ts" : %.*g, "pid": %ld, "tid": %ld, "cat": "sched", "args": {"in": {"prev_comm": "%s", "prev_pid": %ld, "prev_tid": %ld}}})",
                     TIMESTAMP_PRECISION, toMs(timestamp), next_pid, next_tid, prev_comm, prev_pid, prev_tid);
@@ -921,6 +931,7 @@ struct Event
     int64_t tid = -1;
     int64_t pid = -1;
     char type = 'i';
+    bool isFilteredByTime = false;
 };
 
 enum class ArgError
@@ -1083,7 +1094,7 @@ struct Formatter
             if (event->name == "syscall_newstat" && field == "statbuf")
                 return true;
         } else if (startsWith(event->category, "qt")) {
-            if (contains({"object", "event", "sender", "receiver"}, field))
+            if (contains({"object", "event", "sender", "receiver", "slotObject"}, field))
                 return true;
 
             if (event->name == "qtgui:QImageReader_read_reading" && field == "reader")
@@ -1239,7 +1250,7 @@ void Context::parseEvent(bt_ctf_event* ctf_event)
 
     count(event.name, event.category);
 
-    if (isFiltered(event.name) || isFilteredByPid(event.pid))
+    if (event.isFilteredByTime || isFiltered(event.name) || isFilteredByPid(event.pid))
         return;
 
     argsStream.str({});

@@ -38,6 +38,8 @@ struct CliOptions
     std::vector<int64_t> pidWhitelist;
     std::vector<std::string> processWhitelist;
     bool enableStatistics = false;
+    int64_t minTime = 0;
+    int64_t maxTime = 0;
 };
 
 CliOptions parseCliOptions(int argc, char** argv);
