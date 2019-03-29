@@ -46,6 +46,13 @@
 
 #include "clioptions.h"
 
+#include "config.h"
+
+#if Qt5Gui_FOUND
+#include <QEvent>
+#include <QMetaEnum>
+#endif
+
 template<typename Callback>
 void findMetadataFiles(const std::filesystem::path& path, Callback&& callback)
 {
@@ -989,6 +996,27 @@ struct Formatter
 
     void operator()(std::string_view field, int64_t value)
     {
+#if Qt5Gui_FOUND
+        if (startsWith(event->category, "qt")) {
+            auto isEventType = [this, field]() {
+                if (field != "type")
+                    return false;
+                if (event->name.find("Event") != event->name.npos)
+                    return true;
+                if (event->name.find("Application_notify") != event->name.npos)
+                    return true;
+                return false;
+            };
+            if (isEventType()) {
+                const auto metaEnum = QMetaEnum::fromType<QEvent::Type>();
+                const auto values = metaEnum.valueToKeys(value);
+                if (!values.isEmpty()) {
+                    (*this)(field, values.constData());
+                    return;
+                }
+            }
+        }
+#endif
         newField(field);
         stream << std::to_string(value);
 
