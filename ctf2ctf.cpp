@@ -1010,6 +1010,12 @@ struct Formatter
 
             if (event->name == "syscall_sendmsg" && field == "msg")
                 return true;
+
+            if (event->name == "syscall_ppoll" && field == "tsp")
+                return true;
+
+            if (event->name == "syscall_newstat" && field == "statbuf")
+                return true;
         } else if (startsWith(event->category, "qt")) {
             if (contains({"object", "event", "sender", "receiver"}, field))
                 return true;
