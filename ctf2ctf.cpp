@@ -926,13 +926,14 @@ void addArg(const bt_ctf_event* event, const bt_declaration* decl, const bt_defi
         break;
     case CTF_TYPE_ARRAY: {
         const auto encoding = bt_ctf_get_encoding(decl);
-        if (encoding != CTF_STRING_ASCII && encoding != CTF_STRING_UTF8) {
-            formatter(field_name, ArgError::UnhandledArrayType, encoding);
-        } else {
+        if (encoding == CTF_STRING_ASCII || encoding == CTF_STRING_UTF8) {
             formatter(field_name, bt_ctf_get_char_array(def));
+            break;
         }
-        break;
+        [[fallthrough]];
     }
+    case CTF_TYPE_VARIANT:
+    case CTF_TYPE_STRUCT:
     case CTF_TYPE_SEQUENCE: {
         unsigned int numEntries = 0;
         const bt_definition* const* sequence = nullptr;
@@ -940,7 +941,7 @@ void addArg(const bt_ctf_event* event, const bt_declaration* decl, const bt_defi
             // empty sequence, skip
             return;
         }
-        formatter(field_name, sequence, numEntries);
+        formatter(field_name, sequence, numEntries, type);
         break;
     }
     default:
@@ -1083,9 +1084,9 @@ struct Formatter
         }
     }
 
-    void operator()(std::string_view field, const bt_definition* const* sequence, unsigned numEntries)
+    void operator()(std::string_view field, const bt_definition* const* sequence, unsigned numEntries, ctf_type_id type)
     {
-        if (startsWith(event->category, "qt")) {
+        if (type == CTF_TYPE_SEQUENCE && startsWith(event->category, "qt")) {
             std::string string;
             for (unsigned i = 0; i < numEntries; ++i) {
                 const auto* def = sequence[i];
@@ -1108,16 +1109,20 @@ struct Formatter
             return;
         }
 
+        const auto isArray = type == CTF_TYPE_SEQUENCE || type == CTF_TYPE_ARRAY;
+
         newField(field);
-        stream << '[';
+        stream << (isArray ? '[' : '{');
+
         Formatter childFormatter(stream, context, event);
-        childFormatter.noFieldNames = true;
+        childFormatter.noFieldNames = isArray;
         for (unsigned i = 0; i < numEntries; ++i) {
             const auto* def = sequence[i];
             const auto* decl = bt_ctf_get_decl_from_def(def);
             addArg(event->ctf_event, decl, def, childFormatter);
         }
-        stream << ']';
+
+        stream << (isArray ? ']' : '}');
     }
 
     void newField(std::string_view field)
