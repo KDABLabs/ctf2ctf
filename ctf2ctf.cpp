@@ -331,19 +331,37 @@ struct Context
         if (isFilteredByPid(pid))
             return;
 
-        auto printName = [this, tid, pid, name, timestamp](const char* type, int64_t id) {
-            if (id == INVALID_TID)
-                return;
+        auto getName = [this](int64_t id) -> std::string& {
             auto it = tids.find(id);
-            if (it != tids.end() && it->second.name == name)
-                return;
-            tids[tid].name = name;
+            if (it == tids.end())
+                it = tids.insert(it, {id, {}});
+            return it->second.name;
+        };
 
+        auto printName = [this, tid, pid, name, timestamp](const char* type) {
             printEvent(R"({"name": "%s", "ph": "M", "ts": %ld, "pid": %ld, "tid": %ld, "args": {"name": "%.*s"}})",
                        type, timestamp, pid, tid, name.size(), name.data());
         };
-        printName("process_name", pid);
-        printName("thread_name", tid);
+
+        if (pid != INVALID_TID) {
+            auto& pidName = getName(pid);
+            if (pidName.empty() || (tid == pid && pidName != name)) {
+                pidName = name;
+                printName("process_name");
+                if (tid == pid) {
+                    // always update main thread name when we update the process name
+                    printName("thread_name");
+                    return;
+                }
+            }
+        }
+        if (tid != INVALID_TID) {
+            auto& tidName = getName(tid);
+            if (tidName != name) {
+                tidName = name;
+                printName("thread_name");
+            }
+        }
     }
 
     template<typename... T>
