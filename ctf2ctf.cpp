@@ -749,6 +749,18 @@ struct Event
             context->printName(prev_tid, prev_pid, prev_comm, timestamp);
 
             context->schedSwitch(cpuId, prev_tid, next_tid, timestamp);
+
+            // TODO: look into flow events?
+            if (!context->isFilteredByPid(prev_tid)) {
+                context->printEvent(
+                    R"({"name": "sched_switch", "ph": "B", "ts" : %.*g, "pid": %ld, "tid": %ld, "cat": "sched", "args": {"out": {"next_comm": "%s", "next_pid": %ld, "next_tid": %ld}}})",
+                    TIMESTAMP_PRECISION, toMs(timestamp), prev_pid, prev_tid, next_comm, next_pid, next_tid);
+            }
+            if (!context->isFilteredByPid(next_tid)) {
+                context->printEvent(
+                    R"({"name": "sched_switch", "ph": "E", "ts" : %.*g, "pid": %ld, "tid": %ld, "cat": "sched", "args": {"in": {"prev_comm": "%s", "prev_pid": %ld, "prev_tid": %ld}}})",
+                    TIMESTAMP_PRECISION, toMs(timestamp), next_pid, next_tid, prev_comm, prev_pid, prev_tid);
+            }
         } else if (name == "sched_process_fork") {
             const auto parent_pid = get_int64(event, event_fields_scope, "parent_pid").value();
             const auto child_tid = get_int64(event, event_fields_scope, "child_tid").value();
