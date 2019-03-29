@@ -384,6 +384,14 @@ struct Context
             tids.erase(tids.find(tid));
     }
 
+    void pageFault(int64_t pid, int64_t timestamp)
+    {
+        auto& pageFaults = pids[pid].pageFaults;
+        pageFaults++;
+        printEvent(R"({"name": "page faults", "ph": "C", "ts": %.*g, "pid": %ld, "tid": %ld, "args": {"value": %lu}})",
+                   TIMESTAMP_PRECISION, toMs(timestamp), pid, pid, pageFaults);
+    }
+
     void printName(int64_t tid, int64_t pid, std::string_view name, int64_t timestamp)
     {
         if (tid == pid) {
@@ -702,6 +710,7 @@ private:
         std::unordered_map<int64_t, std::string> fdToFilename;
         std::vector<MMap> mmaps;
         uint64_t anonMmapped = 0;
+        uint64_t pageFaults = 0;
     };
     std::unordered_map<int64_t, PidData> pids;
     struct IrqData
@@ -1266,6 +1275,9 @@ void Context::parseEvent(bt_ctf_event* ctf_event)
 
     if (event.isFilteredByTime || isFiltered(event.name) || isFilteredByPid(event.pid))
         return;
+
+    if (event.category == "x86_exceptions_page_fault")
+        pageFault(event.pid, event.timestamp);
 
     argsStream.str({});
     if (event.event_fields_scope)
