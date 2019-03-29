@@ -1024,7 +1024,7 @@ struct Formatter
             if (event->name == "syscall_mmap" && field == "ret")
                 return true;
 
-            if (event->name == "syscall_sendmsg" && field == "msg")
+            if (field == "msg" && (event->name == "syscall_sendmsg" || event->name == "syscall_recvmsg"))
                 return true;
 
             if (event->name == "syscall_ppoll" && field == "tsp")
