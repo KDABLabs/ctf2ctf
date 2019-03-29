@@ -29,12 +29,14 @@
 #include <babeltrace/ctf/events.h>
 #include <babeltrace/ctf/iterator.h>
 
-#include <algorithm>
 #include <cmath>
 #include <cstdio>
+
+#include <algorithm>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -52,6 +54,14 @@
 #include <QEvent>
 #include <QMetaEnum>
 #endif
+
+constexpr auto TIMESTAMP_PRECISION = std::numeric_limits<double>::max_digits10;
+double toMs(int64_t timestamp)
+{
+    const auto ms = timestamp / 1000;
+    const auto ns = timestamp % 1000;
+    return static_cast<double>(ms) + static_cast<double>(ns) * 1E-3;
+}
 
 template<typename Callback>
 void findMetadataFiles(const std::filesystem::path& path, Callback&& callback)
@@ -352,8 +362,8 @@ struct Context
                 if (pid_it->second.anonMmapped > 0) {
                     // reset counters to zero to ensure the graph expands the full width of process lifetime
                     printEvent(
-                        R"({"name": "anon mmapped", "ph": "C", "ts": %lu, "pid": %ld, "tid": %ld, "args": {"value": 0}})",
-                        timestamp, pid, pid);
+                        R"({"name": "anon mmapped", "ph": "C", "ts": %.*g, "pid": %ld, "tid": %ld, "args": {"value": 0}})",
+                        TIMESTAMP_PRECISION, toMs(timestamp), pid, pid);
                 }
                 pids.erase(pid_it);
             }
@@ -385,8 +395,8 @@ struct Context
         };
 
         auto printName = [this, tid, pid, name, timestamp](const char* type) {
-            printEvent(R"({"name": "%s", "ph": "M", "ts": %ld, "pid": %ld, "tid": %ld, "args": {"name": "%.*s"}})",
-                       type, timestamp, pid, tid, name.size(), name.data());
+            printEvent(R"({"name": "%s", "ph": "M", "ts": %.*g, "pid": %ld, "tid": %ld, "args": {"name": "%.*s"}})",
+                       type, TIMESTAMP_PRECISION, toMs(timestamp), pid, tid, name.size(), name.data());
         };
 
         if (pid != INVALID_TID) {
@@ -496,8 +506,8 @@ struct Context
                 return;
 
             const auto& comm = tids[tid].name;
-            printEvent(R"#({"name": "%s (%ld)", "ph": "%c", "ts": %lu, "pid": %ld, "tid": %ld, "cat": "process"})#",
-                       comm.c_str(), tid, type, timestamp, group.id, eventTid);
+            printEvent(R"#({"name": "%s (%ld)", "ph": "%c", "ts": %.*g, "pid": %ld, "tid": %ld, "cat": "process"})#",
+                       comm.c_str(), tid, type, TIMESTAMP_PRECISION, toMs(timestamp), group.id, eventTid);
         };
         printCpuCoreProcessEvent(prevTid, 'E');
         printCpuCoreProcessEvent(nextTid, 'B');
@@ -560,8 +570,8 @@ private:
         else
             anonMmapped -= len;
 
-        printEvent(R"({"name": "anon mmapped", "ph": "C", "ts": %lu, "pid": %ld, "tid": %ld, "args": {"value": %ld}})",
-                   timestamp, pid, pid, anonMmapped);
+        printEvent(R"({"name": "anon mmapped", "ph": "C", "ts": %.*g, "pid": %ld, "tid": %ld, "args": {"value": %ld}})",
+                   TIMESTAMP_PRECISION, toMs(timestamp), pid, pid, anonMmapped);
     }
     void count(std::string_view name, std::string_view category)
     {
@@ -633,8 +643,8 @@ private:
         const auto group = dataFor(counterGroup);
         count(name, group.name);
 
-        printEvent(R"({"name": "%.*s", "ph": "C", "ts": %lu, "pid": %ld, "tid": %ld, "args": {"value": %ld}})",
-                   name.size(), name.data(), timestamp, group.id, group.id, value);
+        printEvent(R"({"name": "%.*s", "ph": "C", "ts": %.*g, "pid": %ld, "tid": %ld, "args": {"value": %ld}})",
+                   name.size(), name.data(), TIMESTAMP_PRECISION, toMs(timestamp), group.id, group.id, value);
     }
 
     struct CoreData
@@ -1219,13 +1229,13 @@ void Context::parseEvent(bt_ctf_event* ctf_event)
         fillArgs(ctf_event, event.event_fields_scope, Formatter(argsStream, this, &event));
 
     if (event.category.empty()) {
-        printEvent(R"({"name": "%.*s", "ph": "%c", "ts": %lu, "pid": %ld, "tid": %ld, "args": {%s}})",
-                   event.name.size(), event.name.data(), event.type, event.timestamp, event.pid, event.tid,
-                   argsStream.str().c_str());
+        printEvent(R"({"name": "%.*s", "ph": "%c", "ts": %.*g, "pid": %ld, "tid": %ld, "args": {%s}})",
+                   event.name.size(), event.name.data(), event.type, TIMESTAMP_PRECISION, toMs(event.timestamp),
+                   event.pid, event.tid, argsStream.str().c_str());
     } else {
-        printEvent(R"({"name": "%.*s", "ph": "%c", "ts": %lu, "pid": %ld, "tid": %ld, "cat": "%.*s", "args": {%s}})",
-                   event.name.size(), event.name.data(), event.type, event.timestamp, event.pid, event.tid,
-                   event.category.size(), event.category.data(), argsStream.str().c_str());
+        printEvent(R"({"name": "%.*s", "ph": "%c", "ts": %.*g, "pid": %ld, "tid": %ld, "cat": "%.*s", "args": {%s}})",
+                   event.name.size(), event.name.data(), event.type, TIMESTAMP_PRECISION, toMs(event.timestamp),
+                   event.pid, event.tid, event.category.size(), event.category.data(), argsStream.str().c_str());
     }
 }
 
@@ -1253,7 +1263,7 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    printf("{\n  \"displayTimeUnit\": \"ns\",  \"traceEvents\": [");
+    printf("{\n  \"traceEvents\": [");
 
     do {
         auto ctf_event = bt_ctf_iter_read_event(iter.get());
