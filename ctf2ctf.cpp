@@ -1113,6 +1113,8 @@ struct Formatter
                 return true;
         } else if (event->category == "x86_exceptions_page_fault" && contains({"address", "ip"}, field)) {
             return true;
+        } else if (event->category == "lttng_ust_statedump" && field == "baddr") {
+            return true;
         }
 
         return false;
