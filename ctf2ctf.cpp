@@ -328,6 +328,26 @@ struct Context
         options.pidWhitelist.push_back(childPid);
     }
 
+    void threadExit(int64_t tid, int64_t pid, int64_t timestamp)
+    {
+
+        if (tid == pid) {
+            auto pid_it = pids.find(pid);
+            if (pid_it != pids.end()) {
+                if (pid_it->second.anonMmapped > 0) {
+                    // reset counters to zero to ensure the graph expands the full width of process lifetime
+                    printEvent(
+                        R"({"name": "anon mmapped", "ph": "C", "ts": %lu, "pid": %ld, "tid": %ld, "args": {"value": 0}})",
+                        timestamp, pid, pid);
+                }
+                pids.erase(pid_it);
+            }
+        }
+
+        if (auto tid_it = tids.find(tid); tid_it != tids.end())
+            tids.erase(tids.find(tid));
+    }
+
     void printName(int64_t tid, int64_t pid, std::string_view name, int64_t timestamp)
     {
         if (tid == pid) {
@@ -713,6 +733,10 @@ struct Event
             const auto child_comm = get_char_array(event, event_fields_scope, "child_comm").value();
             context->printName(child_tid, child_pid, child_comm, timestamp);
             context->fork(parent_pid, child_pid);
+        } else if (name == "sched_process_free") {
+            const auto tid = get_int64(event, event_fields_scope, "tid").value();
+            const auto pid = context->pid(tid);
+            context->threadExit(tid, pid, timestamp);
         } else if (name == "sched_process_exec") {
             const auto tid = get_int64(event, event_fields_scope, "tid").value();
             const auto pid = context->pid(tid);
