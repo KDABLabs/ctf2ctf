@@ -773,12 +773,12 @@ struct Event
             context->schedSwitch(cpuId, prev_tid, next_tid, timestamp);
 
             // TODO: look into flow events?
-            if (!context->isFilteredByPid(prev_tid) && !isFilteredByTime) {
+            if (!context->isFilteredByPid(prev_pid) && !isFilteredByTime) {
                 context->printEvent(
                     R"({"name": "sched_switch", "ph": "B", "ts" : %.*g, "pid": %ld, "tid": %ld, "cat": "sched", "args": {"out": {"next_comm": "%s", "next_pid": %ld, "next_tid": %ld}}})",
                     TIMESTAMP_PRECISION, context->toMs(timestamp), prev_pid, prev_tid, next_comm, next_pid, next_tid);
             }
-            if (!context->isFilteredByPid(next_tid) && !isFilteredByTime) {
+            if (!context->isFilteredByPid(next_pid) && !isFilteredByTime) {
                 context->printEvent(
                     R"({"name": "sched_switch", "ph": "E", "ts" : %.*g, "pid": %ld, "tid": %ld, "cat": "sched", "args": {"in": {"prev_comm": "%s", "prev_pid": %ld, "prev_tid": %ld}}})",
                     TIMESTAMP_PRECISION, context->toMs(timestamp), next_pid, next_tid, prev_comm, prev_pid, prev_tid);
