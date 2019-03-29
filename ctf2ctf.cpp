@@ -215,6 +215,14 @@ struct Context
         pids[pid].fdToFilename[fd] = filename;
     }
 
+    void closeFd(int64_t pid, int64_t fd)
+    {
+        auto& fds = pids[pid].fdToFilename;
+        auto it = fds.find(fd);
+        if (it != fds.end())
+            fds.erase(it);
+    }
+
     std::string_view fdToFilename(int64_t pid, int64_t fd) const
     {
         auto pid_it = pids.find(pid);
@@ -988,6 +996,8 @@ struct Formatter
             (*this)("file", context->fdToFilename(event->pid, value));
         } else if (field == "ret" && event->name == "syscall_openat") {
             context->setOpenAtFd(event->pid, event->tid, value);
+        } else if (field == "ret" && event->name == "syscall_socket") {
+            context->setFdFilename(event->pid, value, "socket");
         }
     }
 
@@ -1042,6 +1052,8 @@ struct Formatter
 
         if (field == "fd" && event->category == "syscall") {
             (*this)("file", context->fdToFilename(event->pid, static_cast<int64_t>(value)));
+            if (event->name == "syscall_close")
+                context->closeFd(event->pid, value);
         } else if (event->category == "irq" && field == "vec") {
             const auto& irq = context->irq(value);
             (*this)("name", irq.name);
