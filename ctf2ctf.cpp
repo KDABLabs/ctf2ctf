@@ -119,6 +119,18 @@ bool isWhitelisted(const Whitelist& whitelist, const Needle& needle)
     return whitelist.empty() || contains(whitelist, needle);
 }
 
+template<typename T>
+auto findMmapAt(T&& mmaps, uint64_t addr)
+{
+    for (auto it = mmaps.begin(), end = mmaps.end(); it != end; ++it) {
+        if (it->addr > addr)
+            break;
+        if (it->addr <= addr && addr < (it->addr + it->len))
+            return it;
+    }
+    return mmaps.end();
+}
+
 struct KMemAlloc
 {
     uint64_t requested = 0;
@@ -244,6 +256,66 @@ struct Context
         if (it == blockDevices.end())
             return "??";
         return it->second;
+    }
+
+    void mmap(int64_t pid, uint64_t addr, uint64_t len, std::string_view file, int64_t fd)
+    {
+        auto& mmaps = pids[pid].mmaps;
+        auto it =
+            std::lower_bound(mmaps.begin(), mmaps.end(), addr, [](auto map, auto addr) { return map.addr < addr; });
+        mmaps.insert(it, {addr, len, std::string(file), fd});
+    }
+
+    void mmapEntry(int64_t tid, uint64_t len, int64_t fd)
+    {
+        tids[tid].mmapEntry = {len, fd};
+    }
+
+    void mmapExit(int64_t pid, int64_t tid, uint64_t addr, int64_t timestamp)
+    {
+        auto& entry = tids[tid].mmapEntry;
+        if (addr && entry.len) {
+            mmap(pid, addr, entry.len, fdToFilename(pid, entry.fd), entry.fd);
+            anonMmapped(pid, timestamp, entry.fd, entry.len, true);
+        }
+        entry = {};
+    }
+
+    void munmap(int64_t pid, uint64_t addr, uint64_t len, int64_t timestamp)
+    {
+        auto& mmaps = pids[pid].mmaps;
+        auto it = findMmapAt(mmaps, addr);
+        if (it == mmaps.end())
+            return;
+
+        anonMmapped(pid, timestamp, it->fd, len, false);
+
+        if (it->addr == addr && it->len == len) {
+            mmaps.erase(it);
+            return;
+        } else if (it->addr == addr) {
+            it->addr += len;
+        } else if (it->addr + len == addr + len) {
+            it->len -= len;
+        } else {
+            // split up
+            const auto trailing = it->addr + it->len - addr - len;
+            it->len = (addr - it->addr);
+            mmaps.insert(it + 1, {addr + len, trailing, it->file, it->fd});
+        }
+    }
+
+    std::string_view fileMmappedAt(int64_t pid, uint64_t addr) const
+    {
+        auto pid_it = pids.find(pid);
+        if (pid_it == pids.end())
+            return "??";
+
+        const auto& mmaps = pid_it->second.mmaps;
+        auto it = findMmapAt(mmaps, pid);
+        if (it == mmaps.end())
+            return "??";
+        return it->file;
     }
 
     void printName(int64_t tid, int64_t pid, std::string_view name, int64_t timestamp)
@@ -413,6 +485,20 @@ struct Context
     }
 
 private:
+    void anonMmapped(int64_t pid, int64_t timestamp, int64_t fd, uint64_t len, bool add)
+    {
+        if (fd != -1 || isFilteredByPid(pid))
+            return;
+
+        auto& anonMmapped = pids[pid].anonMmapped;
+        if (add)
+            anonMmapped += len;
+        else
+            anonMmapped -= len;
+
+        printEvent(R"({"name": "anon mmapped", "ph": "C", "ts": %lu, "pid": %ld, "tid": %ld, "args": {"value": %ld}})",
+                   timestamp, pid, pid, anonMmapped);
+    }
     void count(std::string_view name, std::string_view category)
     {
         if (!options.enableStatistics)
@@ -502,11 +588,26 @@ private:
         int64_t pid = INVALID_TID;
         std::string name;
         std::string openAtFilename;
+        struct MMapEntry
+        {
+            uint64_t len = 0;
+            int64_t fd = -1;
+        };
+        MMapEntry mmapEntry;
     };
     std::unordered_map<int64_t, TidData> tids;
+    struct MMap
+    {
+        uint64_t addr = 0;
+        uint64_t len = 0;
+        std::string file;
+        int64_t fd = -1;
+    };
     struct PidData
     {
         std::unordered_map<int64_t, std::string> fdToFilename;
+        std::vector<MMap> mmaps;
+        uint64_t anonMmapped = 0;
     };
     std::unordered_map<int64_t, PidData> pids;
     struct IrqData
@@ -605,6 +706,22 @@ struct Event
             const auto fd = get_int64(event, event_fields_scope, "fd").value();
             const auto filename = get_string(event, event_fields_scope, "filename").value();
             context->setFdFilename(pid, fd, filename);
+        } else if (name == "lttng_ust_statedump:bin_info") {
+            const auto baddr = get_uint64(event, event_fields_scope, "baddr").value();
+            const auto memsz = get_uint64(event, event_fields_scope, "memsz").value();
+            const auto path = get_string(event, event_fields_scope, "path").value();
+            context->mmap(pid, baddr, memsz, path, -1);
+        } else if (name == "syscall_entry_mmap") {
+            const auto len = get_uint64(event, event_fields_scope, "len").value();
+            const auto fd = get_int64(event, event_fields_scope, "fd").value();
+            context->mmapEntry(tid, len, fd);
+        } else if (name == "syscall_exit_mmap") {
+            const auto ret = get_uint64(event, event_fields_scope, "ret").value();
+            context->mmapExit(pid, tid, ret, timestamp);
+        } else if (name == "syscall_entry_munmap") {
+            const auto addr = get_uint64(event, event_fields_scope, "addr").value();
+            const auto len = get_uint64(event, event_fields_scope, "len").value();
+            context->munmap(pid, addr, len, timestamp);
         } else if (name == "sched_process_exec") {
             const auto tid = get_int64(event, event_fields_scope, "tid").value();
             const auto pid = context->pid(tid);
@@ -811,7 +928,7 @@ struct Formatter
         newField(field);
         stream << std::to_string(value);
 
-        if (field == "fd" && event->category == "syscall") {
+        if (field == "fd" && value != -1 && event->category == "syscall") {
             (*this)("file", context->fdToFilename(event->pid, value));
         } else if (field == "ret" && event->name == "syscall_openat") {
             context->setOpenAtFd(event->pid, event->tid, value);
@@ -820,23 +937,33 @@ struct Formatter
 
     bool isHexField(std::string_view field) const
     {
-        if (event->category != "syscall" && contains({"addr", "buf", "start"}, field))
-            return true;
+        if (event->category == "kmem") {
+            if (contains({"call_site", "ptr", "page"}, field))
+                return true;
+        } else if (event->category == "syscall") {
+            if (contains({"addr", "buf", "start"}, field))
+                return true;
 
-        if (event->name == "syscall_rt_sigprocmask" && contains({"nset", "oset"}, field))
-            return true;
+            if (event->name == "syscall_rt_sigprocmask" && contains({"nset", "oset"}, field))
+                return true;
 
-        if (event->name == "syscall_futex" && contains({"uaddr", "uaddr2"}, field))
-            return true;
+            if (event->name == "syscall_futex" && contains({"uaddr", "uaddr2"}, field))
+                return true;
 
-        if (event->name == "syscall_sendmsg" && field == "msg")
-            return true;
+            if (event->name == "syscall_mmap" && field == "ret")
+                return true;
 
-        if (startsWith(event->category, "qt") && contains({"object", "event", "sender", "receiver"}, field))
-            return true;
+            if (event->name == "syscall_sendmsg" && field == "msg")
+                return true;
+        } else if (startsWith(event->category, "qt")) {
+            if (contains({"object", "event", "sender", "receiver"}, field))
+                return true;
 
-        if (event->name == "qtgui:QImageReader_read_reading" && field == "reader")
+            if (event->name == "qtgui:QImageReader_read_reading" && field == "reader")
+                return true;
+        } else if (event->category == "x86_exceptions_page_fault" && contains({"address", "ip"}, field)) {
             return true;
+        }
 
         return false;
     }
@@ -862,6 +989,8 @@ struct Formatter
                 (*this)("dev_name", context->blockDeviceName(value));
             else if (field == "old_dev")
                 (*this)("old_dev_name", context->blockDeviceName(value));
+        } else if (event->category == "x86_exceptions_page_fault" && field == "address") {
+            (*this)("file", context->fileMmappedAt(event->pid, value));
         }
     }
 
