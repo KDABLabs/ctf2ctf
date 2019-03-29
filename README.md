@@ -17,13 +17,13 @@ and open the `trace.json.gz` file.
 ## Notable features
 
 - global statistics over time:
--- CPU utilization: how many processes/threads are running in parallel
--- CPU state: which process is run on a given CPU
+  - CPU utilization: how many processes/threads are running in parallel
+  - CPU state: which process is run on a given CPU
 -- CPU frequency: at what frequency is a given CPU running
--- kernel memory: how much memory is allocated by the kernel
--- per-process memory: how large is the anon mmap region of a process
+  - kernel memory: how much memory is allocated by the kernel
+  - per-process memory: how large is the anon mmap region of a process
 - per thread timelines with stacked begin/end events
 - event metadata mapping:
--- page fault address to file
--- syscall `fd` to file
+  - page fault address to file
+  - syscall `fd` to file
 - filter results by process name or process id
