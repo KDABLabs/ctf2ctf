@@ -1105,7 +1105,9 @@ struct Formatter
             stream << value;
         }
 
-        if (field == "fd" && event->category == "syscall") {
+        if (inArray && parentField == "fildes" && event->name == "syscall_pipe2") {
+            context->setFdFilename(event->pid, value, index == 0 ? "pipe(read)" : "pipe(write)");
+        } else if (field == "fd" && event->category == "syscall") {
             (*this)("file", context->fdToFilename(event->pid, static_cast<int64_t>(value)));
             if (event->name == "syscall_close")
                 context->closeFd(event->pid, value);
@@ -1182,8 +1184,10 @@ struct Formatter
         stream << (isArray ? '[' : '{');
 
         Formatter childFormatter(stream, context, event);
-        childFormatter.noFieldNames = isArray;
+        childFormatter.inArray = isArray;
+        childFormatter.parentField = field;
         for (unsigned i = 0; i < numEntries; ++i) {
+            childFormatter.index = i;
             const auto* def = sequence[i];
             const auto* decl = bt_ctf_get_decl_from_def(def);
             addArg(event->ctf_event, decl, def, childFormatter);
@@ -1199,7 +1203,7 @@ struct Formatter
         else
             stream << ", ";
 
-        if (noFieldNames)
+        if (inArray)
             return;
 
         writeString(field);
@@ -1224,7 +1228,9 @@ struct Formatter
     Context* context;
     const Event* event;
     bool firstField = true;
-    bool noFieldNames = false;
+    bool inArray = false;
+    unsigned index = 0;
+    std::string_view parentField;
 };
 
 void Context::parseEvent(bt_ctf_event* ctf_event)
