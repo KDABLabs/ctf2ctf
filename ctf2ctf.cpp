@@ -1110,47 +1110,12 @@ struct Formatter
 
         newField(field);
         stream << '[';
+        Formatter childFormatter(stream, context, event);
+        childFormatter.noFieldNames = true;
         for (unsigned i = 0; i < numEntries; ++i) {
             const auto* def = sequence[i];
             const auto* decl = bt_ctf_get_decl_from_def(def);
-            const auto type = bt_ctf_field_type(decl);
-
-            if (i > 0)
-                stream << ", ";
-
-            switch (type) {
-            case CTF_TYPE_UNKNOWN:
-                stream << "\"<unknown type>\"";
-                break;
-            case CTF_TYPE_INTEGER:
-                switch (bt_ctf_get_int_signedness(decl)) {
-                case 0:
-                    stream << bt_ctf_get_uint64(def);
-                    break;
-                case 1:
-                    stream << bt_ctf_get_int64(def);
-                    break;
-                default:
-                    stream << "\"<unknown integer signedness>\"";
-                    break;
-                }
-                break;
-            case CTF_TYPE_STRING:
-                writeString(bt_ctf_get_string(def));
-                break;
-            case CTF_TYPE_ARRAY: {
-                const auto encoding = bt_ctf_get_encoding(decl);
-                if (encoding != CTF_STRING_ASCII && encoding != CTF_STRING_UTF8) {
-                    stream << "\"<unhandled array type " << encoding << ">\"";
-                } else {
-                    writeString(bt_ctf_get_char_array(def));
-                }
-                break;
-            }
-            default:
-                stream << "\"<unhandled type " << type << ">\"";
-                break;
-            }
+            addArg(event->ctf_event, decl, def, childFormatter);
         }
         stream << ']';
     }
@@ -1161,6 +1126,9 @@ struct Formatter
             firstField = false;
         else
             stream << ", ";
+
+        if (noFieldNames)
+            return;
 
         writeString(field);
         stream << ": ";
@@ -1184,6 +1152,7 @@ struct Formatter
     Context* context;
     const Event* event;
     bool firstField = true;
+    bool noFieldNames = false;
 };
 
 void Context::parseEvent(bt_ctf_event* ctf_event)
