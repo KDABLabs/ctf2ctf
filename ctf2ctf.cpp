@@ -56,12 +56,6 @@
 #endif
 
 constexpr auto TIMESTAMP_PRECISION = std::numeric_limits<double>::max_digits10;
-double toMs(int64_t timestamp)
-{
-    const auto ms = timestamp / 1000;
-    const auto ns = timestamp % 1000;
-    return static_cast<double>(ms) + static_cast<double>(ns) * 1E-3;
-}
 
 template<typename Callback>
 void findMetadataFiles(const std::filesystem::path& path, Callback&& callback)
@@ -190,6 +184,24 @@ struct Context
         tids.reserve(1024);
         irqs.reserve(32);
         blockDevices.reserve(32);
+    }
+
+    double toMs(int64_t timestamp)
+    {
+        if (options.relativeTimestamps) {
+            if (isFilteredByTime(timestamp)) {
+                timestamp = 0;
+            } else if (!firstTimestamp) {
+                firstTimestamp = timestamp;
+                timestamp = 0;
+            } else {
+                timestamp -= firstTimestamp;
+            }
+        }
+
+        const auto ms = timestamp / 1000;
+        const auto ns = timestamp % 1000;
+        return static_cast<double>(ms) + static_cast<double>(ns) * 1E-3;
     }
 
     int64_t tid(uint64_t cpuId) const
@@ -355,7 +367,6 @@ struct Context
 
     void threadExit(int64_t tid, int64_t pid, int64_t timestamp)
     {
-
         if (tid == pid) {
             auto pid_it = pids.find(pid);
             if (pid_it != pids.end()) {
@@ -720,6 +731,7 @@ private:
     };
     std::vector<CategoryStats> categoryStats;
     std::stringstream argsStream;
+    int64_t firstTimestamp = 0;
 };
 
 struct Event
@@ -764,12 +776,12 @@ struct Event
             if (!context->isFilteredByPid(prev_tid) && !isFilteredByTime) {
                 context->printEvent(
                     R"({"name": "sched_switch", "ph": "B", "ts" : %.*g, "pid": %ld, "tid": %ld, "cat": "sched", "args": {"out": {"next_comm": "%s", "next_pid": %ld, "next_tid": %ld}}})",
-                    TIMESTAMP_PRECISION, toMs(timestamp), prev_pid, prev_tid, next_comm, next_pid, next_tid);
+                    TIMESTAMP_PRECISION, context->toMs(timestamp), prev_pid, prev_tid, next_comm, next_pid, next_tid);
             }
             if (!context->isFilteredByPid(next_tid) && !isFilteredByTime) {
                 context->printEvent(
                     R"({"name": "sched_switch", "ph": "E", "ts" : %.*g, "pid": %ld, "tid": %ld, "cat": "sched", "args": {"in": {"prev_comm": "%s", "prev_pid": %ld, "prev_tid": %ld}}})",
-                    TIMESTAMP_PRECISION, toMs(timestamp), next_pid, next_tid, prev_comm, prev_pid, prev_tid);
+                    TIMESTAMP_PRECISION, context->toMs(timestamp), next_pid, next_tid, prev_comm, prev_pid, prev_tid);
             }
         } else if (name == "sched_process_fork") {
             const auto parent_pid = get_int64(event, event_fields_scope, "parent_pid").value();
