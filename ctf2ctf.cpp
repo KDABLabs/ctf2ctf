@@ -55,6 +55,31 @@
 #include <QMetaEnum>
 #endif
 
+// cf. lttng-modules/instrumentation/events/lttng-module/block.h
+std::string rwbsToString(uint64_t rwbs)
+{
+    std::string ret;
+    auto check = [&ret, rwbs](std::string_view name, uint16_t flag) {
+        if (rwbs & (1 << flag)) {
+            if (!ret.empty())
+                ret += ", ";
+            ret += name;
+        }
+    };
+    check("write", 0);
+    check("discard", 1);
+    check("read", 2);
+    check("rahead", 3);
+    check("barrier", 4);
+    check("sync", 5);
+    check("meta", 6);
+    check("secure", 7);
+    check("flush", 8);
+    check("fua", 9);
+    check("preflush", 10);
+    return ret;
+}
+
 constexpr auto TIMESTAMP_PRECISION = std::numeric_limits<double>::max_digits10;
 
 template<typename Callback>
@@ -284,7 +309,7 @@ struct Context
 
     void setBlockDeviceName(uint64_t device, std::string_view name)
     {
-        blockDevices[device] = name;
+        blockDevices[device].name = name;
     }
 
     std::string_view blockDeviceName(uint64_t device) const
@@ -292,7 +317,7 @@ struct Context
         auto it = blockDevices.find(device);
         if (it == blockDevices.end())
             return "??";
-        return it->second;
+        return it->second.name;
     }
 
     void mmap(int64_t pid, uint64_t addr, uint64_t len, std::string_view file, int64_t fd)
@@ -537,6 +562,67 @@ struct Context
         printCount(CounterGroup::CPU, "CPU " + std::to_string(cpuId) + " frequency", frequency, timestamp);
     }
 
+    void blockRqIssue(uint64_t dev, uint64_t sector, uint64_t nr_sector, uint64_t bytes, uint64_t rwbs, int64_t tid,
+                      std::string_view comm, int64_t timestamp)
+    {
+        if (isFilteredByTime(timestamp))
+            return;
+
+        const auto pid = this->pid(tid);
+        if (isFilteredByPid(pid))
+            return;
+
+        auto device_it = blockDevices.find(dev);
+        if (device_it == blockDevices.end())
+            return;
+        auto& device = device_it->second;
+
+        const auto group = dataFor(CounterGroup::Block);
+        const auto eventTid = BLOCK_TID_OFFFSET - dev;
+        if (!device.printedDeviceName) {
+            printEvent(
+                R"({"name": "thread_name", "ph": "M", "pid": %ld, "tid": %ld, "args": { "name": "%s requests" }})",
+                group.id, eventTid, device.name.c_str());
+            device.printedDeviceName = true;
+        }
+
+        device.bytesPending += bytes;
+        device.requests[sector] = {bytes, std::string(comm), tid};
+        printCount(CounterGroup::Block, device.name + " bytes pending", device.bytesPending, timestamp);
+
+        printEvent(
+            R"#({"name": "%.*s (%ld)", "ph": "B", "ts": %.*g, "pid": %ld, "tid": %ld, "cat": "block", "args": {"sector": %lu, "nr_sector": %lu, "bytes": %lu, "rwbs": "%s"}})#",
+            comm.size(), comm.data(), tid, TIMESTAMP_PRECISION, toMs(timestamp), group.id, eventTid, sector, nr_sector,
+            bytes, rwbsToString(rwbs).c_str());
+
+        auto& pidData = pids[pid];
+        pidData.blockIoBytesPending += bytes;
+        printEvent(
+            R"({"name": "block I/O bytes pending", "ph": "C", "ts": %.*g, "pid": %ld, "tid": %ld, "args": {"value": %ld}})",
+            TIMESTAMP_PRECISION, toMs(timestamp), pid, pid, pidData.blockIoBytesPending);
+    }
+
+    void blockRqRequeue(uint64_t dev, uint64_t sector, int64_t timestamp)
+    {
+        finishBlockRequest(
+            dev, sector, timestamp, [this](const auto& comm, auto tid, auto groupId, auto eventTid, auto timestamp) {
+                printEvent(
+                    R"#({"name": "%s (%ld)", "ph": "E", "ts": %.*g, "pid": %ld, "tid": %ld, "cat": "block", "args": {"error": "requeue"}})#",
+                    comm.c_str(), tid, TIMESTAMP_PRECISION, toMs(timestamp), groupId, eventTid);
+            });
+    }
+
+    void blockRqComplete(uint64_t dev, uint64_t sector, int64_t error, int64_t timestamp)
+    {
+        finishBlockRequest(
+            dev, sector, timestamp,
+            [error, this](const auto& comm, auto tid, auto groupId, auto eventTid, auto timestamp) {
+                printEvent(
+                    R"#({"name": "%s (%ld)", "ph": "E", "ts": %.*g, "pid": %ld, "tid": %ld, "cat": "block", "args": {"error": %ld}})#",
+                    comm.c_str(), tid, TIMESTAMP_PRECISION, toMs(timestamp), groupId, eventTid, error);
+            });
+    }
+
     bool isFiltered(std::string_view name) const
     {
         return std::any_of(options.exclude.begin(), options.exclude.end(),
@@ -587,6 +673,39 @@ struct Context
     }
 
 private:
+    template<typename PrintEventCallback>
+    void finishBlockRequest(uint64_t dev, uint64_t sector, int64_t timestamp, PrintEventCallback&& callback)
+    {
+        auto device_it = blockDevices.find(dev);
+        if (device_it == blockDevices.end())
+            return;
+        auto& device = device_it->second;
+
+        auto it = device.requests.find(sector);
+        if (it == device.requests.end())
+            return;
+
+        const auto& bytes = it->second.bytes;
+        const auto& comm = it->second.comm;
+        const auto tid = it->second.tid;
+
+        device.bytesPending -= bytes;
+
+        printCount(CounterGroup::Block, device.name, device.bytesPending, timestamp);
+        const auto group = dataFor(CounterGroup::Block);
+        const auto eventTid = BLOCK_TID_OFFFSET - dev;
+        callback(comm, tid, group.id, eventTid, timestamp);
+
+        const auto pid = this->pid(tid);
+        auto& pidData = pids[pid];
+        pidData.blockIoBytesPending -= bytes;
+        printEvent(
+            R"({"name": "block I/O bytes pending", "ph": "C", "ts": %.*g, "pid": %ld, "tid": %ld, "args": {"value": %ld}})",
+            TIMESTAMP_PRECISION, toMs(timestamp), pid, pid, pidData.blockIoBytesPending);
+
+        device.requests.erase(it);
+    }
+
     void anonMmapped(int64_t pid, int64_t timestamp, int64_t fd, uint64_t len, bool add)
     {
         if (fd != -1 || isFilteredByPid(pid) || isFilteredByTime(timestamp))
@@ -631,13 +750,17 @@ private:
         INVALID_TID = -1,
         CPU_COUNTER_PID = -2,
         MEMORY_COUNTER_PID = -3,
+        BLOCK_COUNTER_PID = -4,
         // cpu id * multiplicator gives us a thread id for per-core events
         CPU_PROCESS_TID_MULTIPLICATOR = -100,
+        // offset - block device id gives us a thread id for per-block events
+        BLOCK_TID_OFFFSET = -2000,
     };
     enum class CounterGroup
     {
         CPU,
         Memory,
+        Block,
     };
     struct GroupData
     {
@@ -650,6 +773,7 @@ private:
         static GroupData groups[] = {
             {"CPU statistics", CPU_COUNTER_PID, false},
             {"Memory statistics", MEMORY_COUNTER_PID, false},
+            {"Block I/O statistics", BLOCK_COUNTER_PID, false},
         };
         const auto groupIndex = static_cast<std::underlying_type_t<CounterGroup>>(counterGroup);
         auto& group = groups[groupIndex];
@@ -711,6 +835,7 @@ private:
         std::vector<MMap> mmaps;
         uint64_t anonMmapped = 0;
         uint64_t pageFaults = 0;
+        uint64_t blockIoBytesPending = 0;
     };
     std::unordered_map<int64_t, PidData> pids;
     struct IrqData
@@ -719,7 +844,20 @@ private:
         std::string action;
     };
     std::unordered_map<uint64_t, IrqData> irqs;
-    std::unordered_map<uint64_t, std::string> blockDevices;
+    struct BlockDeviceData
+    {
+        std::string name;
+        struct RequestData
+        {
+            uint64_t bytes;
+            std::string comm;
+            int64_t tid;
+        };
+        uint64_t bytesPending = 0;
+        std::unordered_map<uint64_t, RequestData> requests;
+        bool printedDeviceName = false;
+    };
+    std::unordered_map<uint64_t, BlockDeviceData> blockDevices;
     std::unordered_map<uint64_t, KMemAlloc> kmem;
     std::unordered_map<uint64_t, KMemAlloc> kmemCached;
     KMemAlloc currentAlloc;
@@ -873,6 +1011,24 @@ struct Event
         } else if (name == "kmem_mm_page_free") {
             const auto order = get_uint64(event, event_fields_scope, "order").value();
             context->pageFree(order, timestamp);
+        } else if (name == "block_rq_issue") {
+            const auto dev = get_uint64(event, event_fields_scope, "dev").value();
+            const auto sector = get_uint64(event, event_fields_scope, "sector").value();
+            const auto nr_sector = get_uint64(event, event_fields_scope, "nr_sector").value();
+            const auto bytes = get_uint64(event, event_fields_scope, "bytes").value();
+            const auto rwbs = get_uint64(event, event_fields_scope, "rwbs").value();
+            const auto tid = get_int64(event, event_fields_scope, "tid").value();
+            const auto comm = get_char_array(event, event_fields_scope, "comm").value();
+            context->blockRqIssue(dev, sector, nr_sector, bytes, rwbs, tid, comm, timestamp);
+        } else if (name == "block_rq_complete") {
+            const auto dev = get_uint64(event, event_fields_scope, "dev").value();
+            const auto sector = get_uint64(event, event_fields_scope, "sector").value();
+            const auto error = get_int64(event, event_fields_scope, "error").value();
+            context->blockRqComplete(dev, sector, error, timestamp);
+        } else if (name == "block_rq_requeue") {
+            const auto dev = get_uint64(event, event_fields_scope, "dev").value();
+            const auto sector = get_uint64(event, event_fields_scope, "sector").value();
+            context->blockRqRequeue(dev, sector, timestamp);
         }
 
         auto removeSuffix = [this](std::string_view suffix) {
