@@ -537,7 +537,7 @@ struct Context
         const auto eventTid = CPU_PROCESS_TID_MULTIPLICATOR * static_cast<int64_t>(cpuId + 1);
         if (!core.printedCpuStateName) {
             printEvent(
-                R"({"name": "thread_name", "ph": "M", "pid": %ld, "tid": %ld, "args": { "name": "CPU %lu State" }})",
+                R"({"name": "thread_name", "ph": "M", "pid": %ld, "tid": %ld, "args": { "name": "CPU %lu state" }})",
                 group.id, eventTid, cpuId);
             core.printedCpuStateName = true;
         }
