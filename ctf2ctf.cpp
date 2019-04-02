@@ -39,7 +39,6 @@
 #include <limits>
 #include <memory>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -878,7 +877,6 @@ private:
         uint64_t counter = 0;
     };
     std::vector<CategoryStats> categoryStats;
-    std::stringstream argsStream;
     int64_t firstTimestamp = 0;
 };
 
@@ -1177,7 +1175,7 @@ void addArg(const bt_ctf_event* event, const bt_declaration* decl, const bt_defi
 }
 
 template<typename ValueFormatter>
-void fillArgs(const bt_ctf_event* event, const bt_definition* scope, ValueFormatter&& formatter)
+void printArgs(const bt_ctf_event* event, const bt_definition* scope, ValueFormatter&& formatter)
 {
     unsigned int fields = 0;
     const bt_definition* const* list = nullptr;
@@ -1198,11 +1196,17 @@ void fillArgs(const bt_ctf_event* event, const bt_definition* scope, ValueFormat
 
 struct Formatter
 {
-    Formatter(std::stringstream& stream, Context* context, const Event* event)
-        : stream(stream)
-        , context(context)
+    Formatter(Context* context, const Event* event)
+        : context(context)
         , event(event)
     {
+    }
+
+    ~Formatter()
+    {
+        if (!firstField && parentField.empty()) {
+            printf("}");
+        }
     }
 
     void operator()(std::string_view field, int64_t value)
@@ -1229,7 +1233,7 @@ struct Formatter
         }
 #endif
         newField(field);
-        stream << std::to_string(value);
+        printf("%ld", value);
 
         if (event->category == "syscall") {
             if (field == "fd" && value != -1) {
@@ -1291,9 +1295,9 @@ struct Formatter
         newField(field);
 
         if (isHexField(field)) {
-            stream << "\"0x" << std::hex << value << '"' << std::dec;
+            printf(R"("0x%lx")", value);
         } else {
-            stream << value;
+            printf("%ld", value);
         }
 
         if (inArray && parentField == "fildes" && event->name == "syscall_pipe2") {
@@ -1330,16 +1334,16 @@ struct Formatter
         newField(field);
         switch (error) {
         case ArgError::UnknownType:
-            stream << "\"<unknown type>\"";
+            puts(R"("<unknown type>")");
             break;
         case ArgError::UnknownSignedness:
-            stream << "\"<unknown signedness>\"";
+            puts(R"("<unknown signedness>")");
             break;
         case ArgError::UnhandledArrayType:
-            stream << "\"<unhandled array type " << arg << ">\"";
+            printf(R"("<unhandled array type %ld>")", arg);
             break;
         case ArgError::UnhandledType:
-            stream << "\"<unhandled type " << arg << ">\"";
+            printf(R"("<unhandled type %ld>")", arg);
             break;
         }
     }
@@ -1386,9 +1390,9 @@ struct Formatter
         const auto isArray = type == CTF_TYPE_SEQUENCE || type == CTF_TYPE_ARRAY;
 
         newField(field);
-        stream << (isArray ? '[' : '{');
+        putc(isArray ? '[' : '{', stdout);
 
-        Formatter childFormatter(stream, context, event);
+        Formatter childFormatter(context, event);
         childFormatter.inArray = isArray;
         childFormatter.parentField = field;
         for (unsigned i = 0; i < numEntries; ++i) {
@@ -1403,38 +1407,40 @@ struct Formatter
             addArg(event->ctf_event, decl, def, childFormatter);
         }
 
-        stream << (isArray ? ']' : '}');
+        putc(isArray ? ']' : '}', stdout);
     }
 
     void newField(std::string_view field)
     {
-        if (firstField)
+        if (firstField) {
             firstField = false;
-        else
-            stream << ", ";
+            if (parentField.empty())
+                printf(R"(, "args": {)");
+        } else {
+            printf(", ");
+        }
 
         if (inArray)
             return;
 
         writeString(field);
-        stream << ": ";
+        printf(": ");
     }
 
     void writeString(std::string_view string)
     {
-        stream << '"';
+        putc('"', stdout);
         for (auto c : string) {
             if (c == '\\')
-                stream << "\\\\";
+                puts("\\\\");
             else if (c == '"')
-                stream << "\\\"";
+                puts("\\\"");
             else
-                stream << c;
+                putc(c, stdout);
         }
-        stream << '"';
+        putc('"', stdout);
     }
 
-    std::stringstream& stream;
     Context* context;
     const Event* event;
     bool firstField = true;
@@ -1455,19 +1461,17 @@ void Context::parseEvent(bt_ctf_event* ctf_event)
     if (event.category == "x86_exceptions_page_fault")
         pageFault(event.pid, event.timestamp);
 
-    argsStream.str({});
-    if (event.event_fields_scope)
-        fillArgs(ctf_event, event.event_fields_scope, Formatter(argsStream, this, &event));
+    printEvent(R"({"name": "%.*s", "ph": "%c", "ts": %.*g, "pid": %ld, "tid": %ld)", event.name.size(),
+               event.name.data(), event.type, TIMESTAMP_PRECISION, toMs(event.timestamp), event.pid, event.tid);
 
-    if (event.category.empty()) {
-        printEvent(R"({"name": "%.*s", "ph": "%c", "ts": %.*g, "pid": %ld, "tid": %ld, "args": {%s}})",
-                   event.name.size(), event.name.data(), event.type, TIMESTAMP_PRECISION, toMs(event.timestamp),
-                   event.pid, event.tid, argsStream.str().c_str());
-    } else {
-        printEvent(R"({"name": "%.*s", "ph": "%c", "ts": %.*g, "pid": %ld, "tid": %ld, "cat": "%.*s", "args": {%s}})",
-                   event.name.size(), event.name.data(), event.type, TIMESTAMP_PRECISION, toMs(event.timestamp),
-                   event.pid, event.tid, event.category.size(), event.category.data(), argsStream.str().c_str());
+    if (!event.category.empty()) {
+        printf(R"(, "cat": "%.*s")", static_cast<int>(event.category.size()), event.category.data());
     }
+
+    if (event.event_fields_scope)
+        printArgs(ctf_event, event.event_fields_scope, Formatter(this, &event));
+
+    printf("}");
 }
 
 int main(int argc, char** argv)
