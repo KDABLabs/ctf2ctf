@@ -53,6 +53,7 @@
 #if Qt5Gui_FOUND
 #include <QEvent>
 #include <QMetaEnum>
+#include <QString>
 #endif
 
 // cf. lttng-modules/instrumentation/events/lttng-module/block.h
@@ -1347,6 +1348,9 @@ struct Formatter
     {
         if (type == CTF_TYPE_SEQUENCE && startsWith(event->category, "qt")) {
             std::string string;
+#if Qt5Gui_FOUND
+            QString utf16String;
+#endif
             for (unsigned i = 0; i < numEntries; ++i) {
                 const auto* def = sequence[i];
                 const auto* decl = bt_ctf_get_decl_from_def(def);
@@ -1361,9 +1365,15 @@ struct Formatter
                               << std::endl;
                     break;
                 }
-                // TODO: convert utf16 to utf8
+#if Qt5Gui_FOUND
+                utf16String.append(QChar(static_cast<char16_t>(bt_ctf_get_uint64(def))));
+#else
                 string.push_back(static_cast<char>(bt_ctf_get_uint64(def)));
+#endif
             }
+#if Qt5Gui_FOUND
+            string = utf16String.toStdString();
+#endif
             (*this)(field, string);
             return;
         }
