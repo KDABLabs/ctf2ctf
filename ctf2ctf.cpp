@@ -1431,12 +1431,9 @@ struct Formatter
     {
         putc('"', stdout);
         for (auto c : string) {
-            if (c == '\\')
-                puts("\\\\");
-            else if (c == '"')
-                puts("\\\"");
-            else
-                putc(c, stdout);
+            if ((c >= 0 && c <= 0x1F) || c == '"')
+                putc('\\', stdout);
+            putc(c, stdout);
         }
         putc('"', stdout);
     }
