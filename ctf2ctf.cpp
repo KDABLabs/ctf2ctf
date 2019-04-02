@@ -138,6 +138,14 @@ bool endsWith(std::string_view string, std::string_view suffix)
     return string.size() >= suffix.size() && std::equal(suffix.rbegin(), suffix.rend(), string.rbegin());
 }
 
+bool removeSuffix(std::string_view& name, std::string_view suffix)
+{
+    if (!endsWith(name, suffix))
+        return false;
+    name.remove_suffix(suffix.length());
+    return true;
+}
+
 template<typename List, typename Needle>
 bool contains(List&& list, const Needle& needle)
 {
@@ -200,6 +208,7 @@ struct Context
 {
     static constexpr const uint64_t PAGE_SIZE = 4096;
 
+    bool reportedBrokenTracefString = false;
     CliOptions options;
 
     Context(CliOptions options)
@@ -909,6 +918,33 @@ struct Event
             return;
         }
 
+        auto rewriteName = [this](std::string_view& name, std::string_view needle, std::string_view replacement,
+                                  bool atStart) {
+            const auto pos = atStart ? 0 : name.find(needle);
+
+            if (atStart && !startsWith(name, needle))
+                return false;
+            else if (!atStart && pos == name.npos)
+                return false;
+
+            mutatedName = name;
+            mutatedName.replace(pos, needle.size(), replacement);
+            name = mutatedName;
+            return true;
+        };
+
+        auto setType = [rewriteName](std::string_view& name) -> char {
+            if (removeSuffix(name, "_entry") || rewriteName(name, "syscall_entry_", "syscall_", true)
+                || rewriteName(name, "_begin_", "_", false) || rewriteName(name, "_before_", "_", false)) {
+                return 'B';
+            } else if (removeSuffix(name, "_exit") || rewriteName(name, "syscall_exit_", "syscall_", true)
+                       || rewriteName(name, "_end_", "_", false) || rewriteName(name, "_after_", "_", false)) {
+                return 'E';
+            } else {
+                return 'i';
+            }
+        };
+
         if (name == "sched_switch") {
             const auto next_tid = get_int64(event, event_fields_scope, "next_tid").value();
             context->setTid(cpuId, next_tid);
@@ -1034,36 +1070,30 @@ struct Event
             const auto dev = get_uint64(event, event_fields_scope, "dev").value();
             const auto sector = get_uint64(event, event_fields_scope, "sector").value();
             context->blockRqRequeue(dev, sector, timestamp);
+        } else if (name == "lttng_ust_tracef:event") {
+            const auto msg = std::string_view(get_string(event, event_fields_scope, "msg").value());
+            if (!msg.data() && !context->reportedBrokenTracefString) {
+                std::cerr << "failed to read lttng_ust_tracef:event.msg\n"
+                          << "please build babeltrace with https://github.com/efficios/babeltrace/pull/98 applied to "
+                             "fix this\n";
+                context->reportedBrokenTracefString = true;
+            } else {
+                auto new_name = msg.substr(0, msg.find(' '));
+                const auto fullMsg = new_name == msg;
+                if (!new_name.empty() && new_name.back() == ':')
+                    new_name.remove_suffix(1);
+                const auto new_type = setType(new_name);
+                if (new_type != 'i') {
+                    name = new_name;
+                    type = new_type;
+                    category = "lttng_ust";
+                    skipArgs = fullMsg;
+                    return;
+                }
+            }
         }
 
-        auto removeSuffix = [this](std::string_view suffix) {
-            if (!endsWith(name, suffix))
-                return false;
-            name.remove_suffix(suffix.length());
-            return true;
-        };
-
-        auto rewriteName = [this](std::string_view needle, std::string_view replacement, bool atStart) {
-            const auto pos = atStart ? 0 : name.find(needle);
-
-            if (atStart && !startsWith(name, needle))
-                return false;
-            else if (!atStart && pos == name.npos)
-                return false;
-
-            mutatedName = name;
-            mutatedName.replace(pos, needle.size(), replacement);
-            name = mutatedName;
-            return true;
-        };
-
-        if (removeSuffix("_entry") || rewriteName("syscall_entry_", "syscall_", true)
-            || rewriteName("_begin_", "_", false) || rewriteName("_before_", "_", false)) {
-            type = 'B';
-        } else if (removeSuffix("_exit") || rewriteName("syscall_exit_", "syscall_", true)
-                   || rewriteName("_end_", "_", false) || rewriteName("_after_", "_", false)) {
-            type = 'E';
-        }
+        type = setType(name);
 
         // TODO: also parse /sys/kernel/debug/tracing/available_events if accessible
         static const auto prefixes = {
@@ -1116,6 +1146,7 @@ struct Event
     int64_t pid = -1;
     char type = 'i';
     bool isFilteredByTime = false;
+    bool skipArgs = false;
 };
 
 enum class ArgError
@@ -1131,6 +1162,8 @@ void addArg(const bt_ctf_event* event, const bt_declaration* decl, const bt_defi
 {
     const auto type = bt_ctf_field_type(decl);
     const auto field_name = bt_ctf_field_name(def);
+    const auto encoding = bt_ctf_get_encoding(decl);
+    const auto isString = encoding == CTF_STRING_ASCII || encoding == CTF_STRING_UTF8;
 
     // skip sequence lengths
     if (type == CTF_TYPE_INTEGER && startsWith(field_name, "_") && endsWith(field_name, "_length"))
@@ -1156,17 +1189,17 @@ void addArg(const bt_ctf_event* event, const bt_declaration* decl, const bt_defi
     case CTF_TYPE_STRING:
         formatter(field_name, bt_ctf_get_string(def));
         break;
-    case CTF_TYPE_ARRAY: {
-        const auto encoding = bt_ctf_get_encoding(decl);
-        if (encoding == CTF_STRING_ASCII || encoding == CTF_STRING_UTF8) {
-            formatter(field_name, bt_ctf_get_char_array(def));
-            break;
-        }
-        [[fallthrough]];
-    }
+    case CTF_TYPE_ARRAY:
     case CTF_TYPE_VARIANT:
     case CTF_TYPE_STRUCT:
     case CTF_TYPE_SEQUENCE: {
+        if (isString && type == CTF_TYPE_SEQUENCE) {
+            formatter(field_name, bt_ctf_get_string(def));
+            break;
+        } else if (isString && type == CTF_TYPE_ARRAY) {
+            formatter(field_name, bt_ctf_get_char_array(def));
+            break;
+        }
         unsigned int numEntries = 0;
         const bt_definition* const* sequence = nullptr;
         if (bt_ctf_get_field_list(event, def, &sequence, &numEntries) != 0 || numEntries == 0) {
@@ -1330,6 +1363,12 @@ struct Formatter
 
     void operator()(std::string_view field, std::string_view value)
     {
+        if (field == "msg" && event->category == "lttng_ust") {
+            if (event->type == 'E')
+                field = "exit_msg";
+            else if (event->type == 'B')
+                field = "entry_msg";
+        }
         newField(field);
         writeString(value);
         if (event->name == "syscall_openat" && field == "filename") {
@@ -1476,7 +1515,7 @@ void Context::parseEvent(bt_ctf_event* ctf_event)
         printf(R"(, "cat": "%.*s")", static_cast<int>(event.category.size()), event.category.data());
     }
 
-    if (event.event_fields_scope)
+    if (event.event_fields_scope && !event.skipArgs)
         printArgs(ctf_event, event.event_fields_scope, Formatter(this, &event));
 
     printf("}");

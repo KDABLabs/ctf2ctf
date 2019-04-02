@@ -28,3 +28,14 @@ and open the `trace.json.gz` file.
   - syscall `fd` to file
 - filter results by process name or process id
 - filter results by time
+
+## Begin/Exit Events
+
+Events names that end with `_entry` are considered to be *Begin Events*
+and need to be followed by an *Exit Event* ending with `_exit`. Alternatively,
+the names can contain `_begin_` or `_before_` for the *Begin Events* and
+`_end_` or `_after` for the *Exit Events*.
+
+For LTTng-ust tracef events, the first space-delimited word is taken as the
+event name, if it matches one of the patterns above. For this to work, you'll
+need to patch babeltrace with https://github.com/efficios/babeltrace/pull/98.
