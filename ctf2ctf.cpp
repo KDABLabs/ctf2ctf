@@ -1058,11 +1058,12 @@ struct Event
         };
 
         if (removeSuffix("_entry") || rewriteName("syscall_entry_", "syscall_", true)
-            || rewriteName("_begin_", "_", false) || rewriteName("_before_", "_", false))
+            || rewriteName("_begin_", "_", false) || rewriteName("_before_", "_", false)) {
             type = 'B';
-        else if (removeSuffix("_exit") || rewriteName("syscall_exit_", "syscall_", true)
-                 || rewriteName("_end_", "_", false) || rewriteName("_after_", "_", false))
+        } else if (removeSuffix("_exit") || rewriteName("syscall_exit_", "syscall_", true)
+                   || rewriteName("_end_", "_", false) || rewriteName("_after_", "_", false)) {
             type = 'E';
+        }
 
         // TODO: also parse /sys/kernel/debug/tracing/available_events if accessible
         static const auto prefixes = {
