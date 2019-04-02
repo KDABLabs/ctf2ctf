@@ -1072,6 +1072,7 @@ struct Event
             "jbd2",
             "kmem",
             "lttng_statedump",
+            "lttng_ust",
             "napi",
             "net",
             "module",
