@@ -41,6 +41,7 @@ struct CliOptions
     int64_t maxTime = 0;
     bool enableStatistics = false;
     bool relativeTimestamps = false;
+    bool skipInstantEvents = false;
 };
 
 CliOptions parseCliOptions(int argc, char** argv);

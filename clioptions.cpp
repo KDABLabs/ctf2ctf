@@ -47,6 +47,8 @@ CliOptions parseCliOptions(int argc, char** argv)
     args::Flag printStatsArg(parser, "stats", "print statistics to stderr", {"print-stats"});
     args::Flag relativeTimestampsArg(parser, "relative-timestamps", "print timestamps relative to the first event",
                                      {"relative-timestamps"});
+    args::Flag skipInstantEventsArg(parser, "skip-instant-events", "don't emit instant events (ph: i)",
+                                    {"skip-instant-events"});
     args::Positional<std::filesystem::path> pathArg(
         parser, "path", "The path to an LTTng trace folder, will be searched recursively for trace data");
     try {
@@ -76,5 +78,6 @@ CliOptions parseCliOptions(int argc, char** argv)
         toNs(args::get(maxTimeArg)),
         args::get(printStatsArg),
         args::get(relativeTimestampsArg),
+        args::get(skipInstantEventsArg),
     };
 }

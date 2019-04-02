@@ -651,6 +651,11 @@ struct Context
         return false;
     }
 
+    bool isFilteredByType(char type) const
+    {
+        return options.skipInstantEvents && type == 'i';
+    }
+
     void printStats(std::ostream& out) const
     {
         if (!options.enableStatistics)
@@ -1453,11 +1458,14 @@ void Context::parseEvent(bt_ctf_event* ctf_event)
 
     count(event.name, event.category);
 
-    if (event.isFilteredByTime || isFiltered(event.name) || isFilteredByPid(event.pid))
+    if (event.isFilteredByTime || isFilteredByPid(event.pid))
         return;
 
     if (event.category == "x86_exceptions_page_fault")
         pageFault(event.pid, event.timestamp);
+
+    if (isFilteredByType(event.type) || isFiltered(event.name))
+        return;
 
     printEvent(R"({"name": "%.*s", "ph": "%c", "ts": %.*g, "pid": %ld, "tid": %ld)", event.name.size(),
                event.name.data(), event.type, TIMESTAMP_PRECISION, toMs(event.timestamp), event.pid, event.tid);
