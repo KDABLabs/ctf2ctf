@@ -31,6 +31,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <stdio_ext.h>
 
 #include <algorithm>
 #include <filesystem>
@@ -1473,6 +1474,11 @@ void Context::parseEvent(bt_ctf_event* ctf_event)
 
 int main(int argc, char** argv)
 {
+    // optimize: we only have a single thread
+    std::ios_base::sync_with_stdio(false);
+    __fsetlocking(stdout, FSETLOCKING_BYCALLER);
+    __fsetlocking(stdin, FSETLOCKING_BYCALLER);
+
     Context context(parseCliOptions(argc, argv));
 
     auto ctx = wrap(bt_context_create(), bt_context_put);
