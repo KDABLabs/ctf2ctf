@@ -1354,6 +1354,11 @@ struct Formatter
             for (unsigned i = 0; i < numEntries; ++i) {
                 const auto* def = sequence[i];
                 const auto* decl = bt_ctf_get_decl_from_def(def);
+                if (!decl) {
+                    fprintf(stderr, "invalid declaration for field %.*s[%u]\n", static_cast<int>(field.size()),
+                            field.data(), i);
+                    break;
+                }
                 const auto type = bt_ctf_field_type(decl);
                 if (type != CTF_TYPE_INTEGER) {
                     std::cerr << "unexpected sequence type for qt tracepoint " << field << ": " << type << std::endl;
@@ -1390,6 +1395,11 @@ struct Formatter
             childFormatter.index = i;
             const auto* def = sequence[i];
             const auto* decl = bt_ctf_get_decl_from_def(def);
+            if (!decl) {
+                fprintf(stderr, "invalid declaration for field %.*s[%u]\n", static_cast<int>(field.size()),
+                        field.data(), i);
+                break;
+            }
             addArg(event->ctf_event, decl, def, childFormatter);
         }
 
