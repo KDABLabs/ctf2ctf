@@ -29,6 +29,7 @@
 #include <babeltrace/ctf/events.h>
 #include <babeltrace/ctf/iterator.h>
 
+#include <cassert>
 #include <cmath>
 #include <cstdio>
 #include <stdio_ext.h>
@@ -44,6 +45,7 @@
 #include <string_view>
 #include <type_traits>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 #include "clioptions.h"
@@ -204,6 +206,16 @@ KMemAlloc& operator-=(KMemAlloc& lhs, const KMemAlloc& rhs)
     return lhs;
 }
 
+std::string commName(std::string_view comm, int64_t tid)
+{
+    std::string ret;
+    ret += comm;
+    ret += " (";
+    ret += std::to_string(tid);
+    ret += ")";
+    return ret;
+}
+
 enum class ArgsType
 {
     Object,
@@ -225,16 +237,19 @@ enum class ArgError
     UnhandledType,
 };
 
+using Arg = std::variant<int64_t, uint64_t, double, std::string_view, char, ArgError>;
+
 class JsonArgsPrinter
 {
 public:
     const std::string_view label;
     const ArgsType type = ArgsType::Object;
 
-    JsonArgsPrinter(ArgsType type, std::string_view label, FILE* out)
+    JsonArgsPrinter(ArgsType type, std::string_view label, FILE* out, JsonArgsPrinter* parent)
         : label(label)
         , type(type)
         , out(out)
+        , parent(parent)
     {
     }
 
@@ -260,16 +275,20 @@ public:
         writeValue(value, formatArgs...);
     }
 
+    JsonArgsPrinter argsPrinter(ArgsType type, std::string_view label)
+    {
+        assert(type != ArgsType::Event);
+        return {type, label, out, this};
+    }
+
 private:
     void newField(std::string_view field)
     {
-        fprintf(out, ", ");
-
         if (firstField) {
             firstField = false;
 
-            if (!label.empty())
-                fprintf(out, R"("%.*s": )", static_cast<int>(label.size()), label.data());
+            if (parent)
+                parent->newField(label);
 
             switch (type) {
             case ArgsType::Event:
@@ -280,6 +299,8 @@ private:
                 fprintf(out, "[");
                 break;
             }
+        } else {
+            fprintf(out, ", ");
         }
 
         if (type == ArgsType::Array)
@@ -299,7 +320,7 @@ private:
         fprintf(out, "%.*g", TIMESTAMP_PRECISION, value);
     }
 
-    void writeValue(uint64_t value, IntegerArgFormatFlag format)
+    void writeValue(uint64_t value, IntegerArgFormatFlag format = IntegerArgFormatFlag::Decimal)
     {
         switch (format) {
         case IntegerArgFormatFlag::Decimal:
@@ -344,7 +365,13 @@ private:
         fprintf(out, "\"%c\"", c);
     }
 
+    void writeValue(const Arg& arg)
+    {
+        std::visit([this](auto arg) { writeValue(arg); }, arg);
+    }
+
     FILE* out = nullptr;
+    JsonArgsPrinter* parent = nullptr;
     bool firstField = true;
 };
 
@@ -373,8 +400,7 @@ public:
             writeSuffix();
     }
 
-    template<typename... T>
-    void writeEvent(const char* fmt, T... args)
+    JsonArgsPrinter eventPrinter()
     {
         if (firstEvent) {
             firstEvent = false;
@@ -385,12 +411,7 @@ public:
 
         fprintf(out, "\n    ");
 
-        fprintf(out, fmt, args...);
-    }
-
-    JsonArgsPrinter argsPrinter(ArgsType type, std::string_view label)
-    {
-        return {type, label, out};
+        return {ArgsType::Event, {}, out, nullptr};
     }
 
 private:
@@ -652,9 +673,7 @@ struct Context
         };
 
         auto printName = [this, tid, pid, name, timestamp](const char* type) {
-            printer.writeEvent(
-                R"({"name": "%s", "ph": "M", "ts": %.*g, "pid": %ld, "tid": %ld, "args": {"name": "%.*s"}})", type,
-                TIMESTAMP_PRECISION, toMs(timestamp), pid, tid, name.size(), name.data());
+            printEvent(type, 'M', timestamp, pid, tid, {}, {{"name", name}});
         };
 
         if (pid != INVALID_TID) {
@@ -736,12 +755,11 @@ struct Context
             core.running = isRunning;
         }
 
-        const auto group = dataFor(CounterGroup::CPU);
+        const auto group = dataFor(CounterGroup::CPU, timestamp);
         const auto eventTid = CPU_PROCESS_TID_MULTIPLICATOR * static_cast<int64_t>(cpuId + 1);
         if (!core.printedCpuStateName) {
-            printer.writeEvent(
-                R"({"name": "thread_name", "ph": "M", "pid": %ld, "tid": %ld, "args": { "name": "CPU %lu state" }})",
-                group.id, eventTid, cpuId);
+            printEvent("thread_name", 'M', timestamp, group.id, eventTid, {},
+                       {{"name", "CPU " + std::to_string(cpuId) + " state"}});
             core.printedCpuStateName = true;
         }
 
@@ -752,26 +770,27 @@ struct Context
             if (isFilteredByPid(pid(tid)))
                 return;
 
-            const auto& comm = tids[tid].name;
-            printer.writeEvent(
-                R"#({"name": "%s (%ld)", "ph": "%c", "ts": %.*g, "pid": %ld, "tid": %ld, "cat": "process"})#",
-                comm.c_str(), tid, type, TIMESTAMP_PRECISION, toMs(timestamp), group.id, eventTid);
+            printEvent(commName(tids[tid].name, tid), type, timestamp, group.id, eventTid, "process");
         };
         printCpuCoreProcessEvent(prevTid, 'E');
         printCpuCoreProcessEvent(nextTid, 'B');
 
         // TODO: look into flow events?
         if (!isFilteredByPid(prevPid)) {
-            printer.writeEvent(
-                R"({"name": "sched_switch", "ph": "B", "ts" : %.*g, "pid": %ld, "tid": %ld, "cat": "sched", "args": {"out": {"next_comm": "%.*s", "next_pid": %ld, "next_tid": %ld}}})",
-                TIMESTAMP_PRECISION, toMs(timestamp), prevPid, prevTid, nextComm.size(), nextComm.data(), nextPid,
-                nextTid);
+            auto event = eventPrinter("sched_switch", 'B', timestamp, prevPid, prevTid, "sched");
+            auto args = event.argsPrinter(ArgsType::Object, "args");
+            auto out = args.argsPrinter(ArgsType::Object, "out");
+            out.writeField("next_comm", nextComm);
+            out.writeField("next_pid", nextPid);
+            out.writeField("next_tid", nextTid);
         }
         if (!isFilteredByPid(nextPid)) {
-            printer.writeEvent(
-                R"({"name": "sched_switch", "ph": "E", "ts" : %.*g, "pid": %ld, "tid": %ld, "cat": "sched", "args": {"in": {"prev_comm": "%.*s", "prev_pid": %ld, "prev_tid": %ld}}})",
-                TIMESTAMP_PRECISION, toMs(timestamp), nextPid, nextTid, prevComm.size(), nextComm.data(), prevPid,
-                prevTid);
+            auto event = eventPrinter("sched_switch", 'E', timestamp, nextPid, nextTid, "sched");
+            auto args = event.argsPrinter(ArgsType::Object, "args");
+            auto out = args.argsPrinter(ArgsType::Object, "in");
+            out.writeField("prev_comm", prevComm);
+            out.writeField("prev_pid", prevPid);
+            out.writeField("prev_tid", prevTid);
         }
     }
 
@@ -795,12 +814,10 @@ struct Context
             return;
         auto& device = device_it->second;
 
-        const auto group = dataFor(CounterGroup::Block);
+        const auto group = dataFor(CounterGroup::Block, timestamp);
         const auto eventTid = BLOCK_TID_OFFFSET - dev;
         if (!device.printedDeviceName) {
-            printer.writeEvent(
-                R"({"name": "thread_name", "ph": "M", "pid": %ld, "tid": %ld, "args": { "name": "%s requests" }})",
-                group.id, eventTid, device.name.c_str());
+            printEvent("thread_name", 'M', timestamp, group.id, eventTid, {}, {{"name", device.name + " requests"}});
             device.printedDeviceName = true;
         }
 
@@ -808,10 +825,8 @@ struct Context
         device.requests[sector] = {bytes, std::string(comm), tid};
         printCount(CounterGroup::Block, device.name + " bytes pending", device.bytesPending, timestamp);
 
-        printer.writeEvent(
-            R"#({"name": "%.*s (%ld)", "ph": "B", "ts": %.*g, "pid": %ld, "tid": %ld, "cat": "block", "args": {"sector": %lu, "nr_sector": %lu, "bytes": %lu, "rwbs": "%s"}})#",
-            comm.size(), comm.data(), tid, TIMESTAMP_PRECISION, toMs(timestamp), group.id, eventTid, sector, nr_sector,
-            bytes, rwbsToString(rwbs).c_str());
+        printEvent(commName(comm, tid), 'B', timestamp, group.id, eventTid, "block",
+                   {{"sector", sector}, {"nr_sector", nr_sector}, {"bytes", bytes}, {"rwbs", rwbsToString(rwbs)}});
 
         auto& pidData = pids[pid];
         pidData.blockIoBytesPending += bytes;
@@ -822,9 +837,7 @@ struct Context
     {
         finishBlockRequest(
             dev, sector, timestamp, [this](const auto& comm, auto tid, auto groupId, auto eventTid, auto timestamp) {
-                printer.writeEvent(
-                    R"#({"name": "%s (%ld)", "ph": "E", "ts": %.*g, "pid": %ld, "tid": %ld, "cat": "block", "args": {"error": "requeue"}})#",
-                    comm.c_str(), tid, TIMESTAMP_PRECISION, toMs(timestamp), groupId, eventTid);
+                printEvent(commName(comm, tid), 'E', timestamp, groupId, eventTid, "block", {{"error", "requeue"}});
             });
     }
 
@@ -833,9 +846,7 @@ struct Context
         finishBlockRequest(
             dev, sector, timestamp,
             [error, this](const auto& comm, auto tid, auto groupId, auto eventTid, auto timestamp) {
-                printer.writeEvent(
-                    R"#({"name": "%s (%ld)", "ph": "E", "ts": %.*g, "pid": %ld, "tid": %ld, "cat": "block", "args": {"error": %ld}})#",
-                    comm.c_str(), tid, TIMESTAMP_PRECISION, toMs(timestamp), groupId, eventTid, error);
+                printEvent(commName(comm, tid), 'E', timestamp, groupId, eventTid, "block", {{"error", error}});
             });
     }
 
@@ -913,7 +924,7 @@ private:
         device.bytesPending -= bytes;
 
         printCount(CounterGroup::Block, device.name, device.bytesPending, timestamp);
-        const auto group = dataFor(CounterGroup::Block);
+        const auto group = dataFor(CounterGroup::Block, timestamp);
         const auto eventTid = BLOCK_TID_OFFFSET - dev;
         callback(comm, tid, group.id, eventTid, timestamp);
 
@@ -986,7 +997,7 @@ private:
         const int64_t id;
         bool namePrinted;
     };
-    GroupData dataFor(CounterGroup counterGroup)
+    GroupData dataFor(CounterGroup counterGroup, int64_t timestamp)
     {
         static GroupData groups[] = {
             {"CPU statistics", CPU_COUNTER_PID, false},
@@ -996,12 +1007,8 @@ private:
         const auto groupIndex = static_cast<std::underlying_type_t<CounterGroup>>(counterGroup);
         auto& group = groups[groupIndex];
         if (!group.namePrinted) {
-            printer.writeEvent(
-                R"({"name": "process_sort_index", "ph": "M", "pid": %1$ld, "tid": %1$ld, "args": { "sort_index": %1$ld }})",
-                group.id);
-            printer.writeEvent(
-                R"({"name": "process_name", "ph": "M", "pid": %1$ld, "tid": %1$ld, "args": { "name": "%2$s" }})",
-                group.id, group.name);
+            printEvent("process_sort_index", 'M', timestamp, group.id, group.id, {}, {{"sort_index", group.id}});
+            printEvent("process_name", 'M', timestamp, group.id, group.id, {}, {{"name", group.name}});
             group.namePrinted = true;
         }
         return group;
@@ -1011,7 +1018,7 @@ private:
         if (isFiltered(name) || isFilteredByTime(timestamp))
             return;
 
-        const auto group = dataFor(counterGroup);
+        const auto group = dataFor(counterGroup, timestamp);
         count(name, group.name);
 
         printCounterValue(name, timestamp, group.id, value);
@@ -1019,14 +1026,13 @@ private:
 
     void printCounterValue(std::string_view name, int64_t timestamp, int64_t pid, int64_t value)
     {
-        printer.writeEvent(R"({"name": "%*.s", "ph": "C", "ts": %.*g, "pid": %ld, "tid": %ld, "args": {"value": %ld}})",
-                           name.size(), name.data(), TIMESTAMP_PRECISION, toMs(timestamp), pid, pid, value);
+        printEvent(name, 'C', timestamp, pid, pid, {}, {{"value", value}});
     }
 
     JsonArgsPrinter eventPrinter(std::string_view name, char type, int64_t timestamp, int64_t pid, int64_t tid,
                                  std::string_view category = {})
     {
-        JsonArgsPrinter eventPrinter = printer.argsPrinter(ArgsType::Event, {});
+        JsonArgsPrinter eventPrinter = printer.eventPrinter();
         eventPrinter.writeField("name", name);
         eventPrinter.writeField("ph", type);
         eventPrinter.writeField("ts", toMs(timestamp));
@@ -1035,6 +1041,17 @@ private:
         if (!category.empty())
             eventPrinter.writeField("cat", category);
         return eventPrinter;
+    }
+
+    void printEvent(std::string_view name, char type, int64_t timestamp, int64_t pid, int64_t tid,
+                    std::string_view category = {}, std::initializer_list<std::pair<std::string_view, Arg>> args = {})
+    {
+        auto eventP = eventPrinter(name, type, timestamp, pid, tid, category);
+        if (args.size()) {
+            auto argsP = eventP.argsPrinter(ArgsType::Object, "args");
+            for (const auto& arg : args)
+                argsP.writeField(arg.first, arg.second);
+        }
     }
 
     struct CoreData
@@ -1439,10 +1456,10 @@ void printArgs(const bt_ctf_event* event, const bt_definition* scope, ValueForma
 
 struct Formatter
 {
-    Formatter(ArgsType type, std::string_view label, Context* context, const Event* event)
+    Formatter(JsonArgsPrinter printer, Context* context, const Event* event)
         : context(context)
         , event(event)
-        , printer(context->printer.argsPrinter(type, label))
+        , printer(std::move(printer))
     {
     }
 
@@ -1611,7 +1628,8 @@ struct Formatter
 
         const auto isArray = type == CTF_TYPE_SEQUENCE || type == CTF_TYPE_ARRAY;
 
-        Formatter childFormatter(isArray ? ArgsType::Array : ArgsType::Object, field, context, event);
+        Formatter childFormatter(printer.argsPrinter(isArray ? ArgsType::Array : ArgsType::Object, field), context,
+                                 event);
         for (unsigned i = 0; i < numEntries; ++i) {
             childFormatter.index = i;
             const auto* def = sequence[i];
@@ -1650,7 +1668,8 @@ void Context::parseEvent(bt_ctf_event* ctf_event)
         auto printer = eventPrinter(event.name, event.type, event.timestamp, event.pid, event.tid, event.category);
 
         if (event.event_fields_scope && !event.skipArgs)
-            printArgs(ctf_event, event.event_fields_scope, Formatter(ArgsType::Object, "args", this, &event));
+            printArgs(ctf_event, event.event_fields_scope,
+                      Formatter(printer.argsPrinter(ArgsType::Object, "args"), this, &event));
     }
 }
 
