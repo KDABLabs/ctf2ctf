@@ -208,6 +208,7 @@ enum class ArgsType
 {
     Object,
     Array,
+    Event,
 };
 
 enum class IntegerArgFormatFlag
@@ -241,6 +242,7 @@ public:
     {
         if (!firstField) {
             switch (type) {
+            case ArgsType::Event:
             case ArgsType::Object:
                 fprintf(out, "}");
                 break;
@@ -251,11 +253,11 @@ public:
         }
     }
 
-    template<typename T, typename... Format>
-    void writeField(std::string_view field, T value, Format... format)
+    template<typename T, typename... FormatArgs>
+    void writeField(std::string_view field, T value, FormatArgs... formatArgs)
     {
         newField(field);
-        writeValue(value, format...);
+        writeValue(value, formatArgs...);
     }
 
 private:
@@ -265,8 +267,12 @@ private:
 
         if (firstField) {
             firstField = false;
-            fprintf(out, R"("%.*s": )", static_cast<int>(label.size()), label.data());
+
+            if (!label.empty())
+                fprintf(out, R"("%.*s": )", static_cast<int>(label.size()), label.data());
+
             switch (type) {
+            case ArgsType::Event:
             case ArgsType::Object:
                 fprintf(out, "{");
                 break;
@@ -286,6 +292,11 @@ private:
     void writeValue(int64_t value)
     {
         fprintf(out, "%ld", value);
+    }
+
+    void writeValue(double value)
+    {
+        fprintf(out, "%.*g", TIMESTAMP_PRECISION, value);
     }
 
     void writeValue(uint64_t value, IntegerArgFormatFlag format)
@@ -326,6 +337,11 @@ private:
             fprintf(out, R"("<unhandled type %ld>")", arg);
             break;
         }
+    }
+
+    void writeValue(char c)
+    {
+        fprintf(out, "\"%c\"", c);
     }
 
     FILE* out = nullptr;
@@ -369,12 +385,6 @@ public:
 
         fprintf(out, "\n    ");
 
-        fprintf(out, fmt, args...);
-    }
-
-    template<typename... T>
-    void writeRaw(const char* fmt, T... args)
-    {
         fprintf(out, fmt, args...);
     }
 
@@ -1013,6 +1023,20 @@ private:
                            name.size(), name.data(), TIMESTAMP_PRECISION, toMs(timestamp), pid, pid, value);
     }
 
+    JsonArgsPrinter eventPrinter(std::string_view name, char type, int64_t timestamp, int64_t pid, int64_t tid,
+                                 std::string_view category = {})
+    {
+        JsonArgsPrinter eventPrinter = printer.argsPrinter(ArgsType::Event, {});
+        eventPrinter.writeField("name", name);
+        eventPrinter.writeField("ph", type);
+        eventPrinter.writeField("ts", toMs(timestamp));
+        eventPrinter.writeField("pid", pid);
+        eventPrinter.writeField("tid", tid);
+        if (!category.empty())
+            eventPrinter.writeField("cat", category);
+        return eventPrinter;
+    }
+
     struct CoreData
     {
         // currently running thread id
@@ -1622,17 +1646,12 @@ void Context::parseEvent(bt_ctf_event* ctf_event)
     if (isFilteredByType(event.type) || isFiltered(event.name))
         return;
 
-    printer.writeEvent(R"({"name": "%.*s", "ph": "%c", "ts": %.*g, "pid": %ld, "tid": %ld)", event.name.size(),
-                       event.name.data(), event.type, TIMESTAMP_PRECISION, toMs(event.timestamp), event.pid, event.tid);
+    {
+        auto printer = eventPrinter(event.name, event.type, event.timestamp, event.pid, event.tid, event.category);
 
-    if (!event.category.empty()) {
-        printer.writeRaw(R"(, "cat": "%.*s")", static_cast<int>(event.category.size()), event.category.data());
+        if (event.event_fields_scope && !event.skipArgs)
+            printArgs(ctf_event, event.event_fields_scope, Formatter(ArgsType::Object, "args", this, &event));
     }
-
-    if (event.event_fields_scope && !event.skipArgs)
-        printArgs(ctf_event, event.event_fields_scope, Formatter(ArgsType::Object, "args", this, &event));
-
-    printer.writeRaw("}");
 }
 
 int main(int argc, char** argv)
