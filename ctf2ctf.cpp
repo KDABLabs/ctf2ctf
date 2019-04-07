@@ -1538,6 +1538,12 @@ struct Formatter
             return true;
         } else if (event->category == "lttng_ust_statedump" && field == "baddr") {
             return true;
+        } else if (contains({"timer", "workqueue"}, event->category)) {
+            return true;
+        } else if (event->category == "skb" && contains({"skbaddr", "location"}, field)) {
+            return true;
+        } else if (event->category == "block" && field == "sector") {
+            return true;
         }
 
         return false;
