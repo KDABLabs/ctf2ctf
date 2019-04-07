@@ -204,15 +204,211 @@ KMemAlloc& operator-=(KMemAlloc& lhs, const KMemAlloc& rhs)
     return lhs;
 }
 
+enum class ArgsType
+{
+    Object,
+    Array,
+};
+
+enum class IntegerArgFormatFlag
+{
+    Decimal,
+    Hexadecimal
+};
+
+enum class ArgError
+{
+    UnknownType,
+    UnknownSignedness,
+    UnhandledArrayType,
+    UnhandledType,
+};
+
+class JsonArgsPrinter
+{
+public:
+    const std::string_view label;
+    const ArgsType type = ArgsType::Object;
+
+    JsonArgsPrinter(ArgsType type, std::string_view label, FILE* out)
+        : label(label)
+        , type(type)
+        , out(out)
+    {
+    }
+
+    ~JsonArgsPrinter()
+    {
+        if (!firstField) {
+            switch (type) {
+            case ArgsType::Object:
+                fprintf(out, "}");
+                break;
+            case ArgsType::Array:
+                fprintf(out, "]");
+                break;
+            }
+        }
+    }
+
+    template<typename T, typename... Format>
+    void writeField(std::string_view field, T value, Format... format)
+    {
+        newField(field);
+        writeValue(value, format...);
+    }
+
+private:
+    void newField(std::string_view field)
+    {
+        fprintf(out, ", ");
+
+        if (firstField) {
+            firstField = false;
+            fprintf(out, R"("%.*s": )", static_cast<int>(label.size()), label.data());
+            switch (type) {
+            case ArgsType::Object:
+                fprintf(out, "{");
+                break;
+            case ArgsType::Array:
+                fprintf(out, "[");
+                break;
+            }
+        }
+
+        if (type == ArgsType::Array)
+            return;
+
+        writeValue(field);
+        fprintf(out, ": ");
+    }
+
+    void writeValue(int64_t value)
+    {
+        fprintf(out, "%ld", value);
+    }
+
+    void writeValue(uint64_t value, IntegerArgFormatFlag format)
+    {
+        switch (format) {
+        case IntegerArgFormatFlag::Decimal:
+            fprintf(out, "%lu", value);
+            break;
+        case IntegerArgFormatFlag::Hexadecimal:
+            fprintf(out, "\"0x%lx\"", value);
+        }
+    }
+
+    void writeValue(std::string_view string)
+    {
+        putc('"', out);
+        for (auto c : string) {
+            if ((c >= 0 && c <= 0x1F) || c == '"')
+                putc('\\', out);
+            putc(c, out);
+        }
+        putc('"', out);
+    }
+
+    void writeValue(ArgError error, int64_t arg)
+    {
+        switch (error) {
+        case ArgError::UnknownType:
+            fputs(R"("<unknown type>")", out);
+            break;
+        case ArgError::UnknownSignedness:
+            fputs(R"("<unknown signedness>")", out);
+            break;
+        case ArgError::UnhandledArrayType:
+            fprintf(out, R"("<unhandled array type %ld>")", arg);
+            break;
+        case ArgError::UnhandledType:
+            fprintf(out, R"("<unhandled type %ld>")", arg);
+            break;
+        }
+    }
+
+    FILE* out = nullptr;
+    bool firstField = true;
+};
+
+class JsonPrinter
+{
+public:
+    JsonPrinter(const std::string& output)
+    {
+        if (output.empty() || output == "-")
+            return;
+
+        if (output == "stderr") {
+            out = stderr;
+            return;
+        }
+
+        if (auto fd = fopen(output.c_str(), "w"))
+            out = fd;
+        else
+            fprintf(stderr, "failed to open %s: %s\n", output.c_str(), strerror(errno));
+    }
+
+    ~JsonPrinter()
+    {
+        if (!firstEvent)
+            writeSuffix();
+    }
+
+    template<typename... T>
+    void writeEvent(const char* fmt, T... args)
+    {
+        if (firstEvent) {
+            firstEvent = false;
+            writePrefix();
+        } else {
+            fprintf(out, ",");
+        }
+
+        fprintf(out, "\n    ");
+
+        fprintf(out, fmt, args...);
+    }
+
+    template<typename... T>
+    void writeRaw(const char* fmt, T... args)
+    {
+        fprintf(out, fmt, args...);
+    }
+
+    JsonArgsPrinter argsPrinter(ArgsType type, std::string_view label)
+    {
+        return {type, label, out};
+    }
+
+private:
+    void writePrefix()
+    {
+        fprintf(out, "{\n  \"traceEvents\": [");
+    }
+
+    void writeSuffix()
+    {
+        fprintf(out, "\n  ]\n}\n");
+    }
+
+    FILE* out = stdout;
+    bool firstEvent = true;
+};
+
 struct Context
 {
     static constexpr const uint64_t PAGE_SIZE = 4096;
 
     bool reportedBrokenTracefString = false;
     CliOptions options;
+    JsonPrinter printer;
 
     Context(CliOptions options)
         : options(std::move(options))
+        , printer(options.outputFile)
     {
         cores.reserve(32);
         pids.reserve(1024);
@@ -407,7 +603,7 @@ struct Context
             if (pid_it != pids.end()) {
                 if (pid_it->second.anonMmapped > 0) {
                     // reset counters to zero to ensure the graph expands the full width of process lifetime
-                    printEvent(
+                    printer.writeEvent(
                         R"({"name": "anon mmapped", "ph": "C", "ts": %.*g, "pid": %ld, "tid": %ld, "args": {"value": 0}})",
                         TIMESTAMP_PRECISION, toMs(timestamp), pid, pid);
                 }
@@ -423,8 +619,9 @@ struct Context
     {
         auto& pageFaults = pids[pid].pageFaults;
         pageFaults++;
-        printEvent(R"({"name": "page faults", "ph": "C", "ts": %.*g, "pid": %ld, "tid": %ld, "args": {"value": %lu}})",
-                   TIMESTAMP_PRECISION, toMs(timestamp), pid, pid, pageFaults);
+        printer.writeEvent(
+            R"({"name": "page faults", "ph": "C", "ts": %.*g, "pid": %ld, "tid": %ld, "args": {"value": %lu}})",
+            TIMESTAMP_PRECISION, toMs(timestamp), pid, pid, pageFaults);
     }
 
     void printName(int64_t tid, int64_t pid, std::string_view name, int64_t timestamp)
@@ -449,8 +646,9 @@ struct Context
         };
 
         auto printName = [this, tid, pid, name, timestamp](const char* type) {
-            printEvent(R"({"name": "%s", "ph": "M", "ts": %.*g, "pid": %ld, "tid": %ld, "args": {"name": "%.*s"}})",
-                       type, TIMESTAMP_PRECISION, toMs(timestamp), pid, tid, name.size(), name.data());
+            printer.writeEvent(
+                R"({"name": "%s", "ph": "M", "ts": %.*g, "pid": %ld, "tid": %ld, "args": {"name": "%.*s"}})", type,
+                TIMESTAMP_PRECISION, toMs(timestamp), pid, tid, name.size(), name.data());
         };
 
         if (pid != INVALID_TID) {
@@ -472,18 +670,6 @@ struct Context
                 printName("thread_name");
             }
         }
-    }
-
-    template<typename... T>
-    void printEvent(const char* fmt, T... args)
-    {
-        if (!firstEvent)
-            printf(",");
-        firstEvent = false;
-
-        printf("\n    ");
-
-        printf(fmt, args...);
     }
 
     void parseEvent(bt_ctf_event* event);
@@ -525,7 +711,8 @@ struct Context
     // swapper is the idle process on linux
     static const constexpr int64_t SWAPPER_TID = 0;
 
-    void schedSwitch(uint64_t cpuId, int64_t prevTid, int64_t nextTid, int64_t timestamp)
+    void schedSwitch(int64_t prevTid, int64_t prevPid, std::string_view prevComm, int64_t nextTid, int64_t nextPid,
+                     std::string_view nextComm, uint64_t cpuId, int64_t timestamp)
     {
         if (prevTid == nextTid || isFilteredByTime(timestamp))
             return;
@@ -546,7 +733,7 @@ struct Context
         const auto group = dataFor(CounterGroup::CPU);
         const auto eventTid = CPU_PROCESS_TID_MULTIPLICATOR * static_cast<int64_t>(cpuId + 1);
         if (!core.printedCpuStateName) {
-            printEvent(
+            printer.writeEvent(
                 R"({"name": "thread_name", "ph": "M", "pid": %ld, "tid": %ld, "args": { "name": "CPU %lu state" }})",
                 group.id, eventTid, cpuId);
             core.printedCpuStateName = true;
@@ -560,11 +747,26 @@ struct Context
                 return;
 
             const auto& comm = tids[tid].name;
-            printEvent(R"#({"name": "%s (%ld)", "ph": "%c", "ts": %.*g, "pid": %ld, "tid": %ld, "cat": "process"})#",
-                       comm.c_str(), tid, type, TIMESTAMP_PRECISION, toMs(timestamp), group.id, eventTid);
+            printer.writeEvent(
+                R"#({"name": "%s (%ld)", "ph": "%c", "ts": %.*g, "pid": %ld, "tid": %ld, "cat": "process"})#",
+                comm.c_str(), tid, type, TIMESTAMP_PRECISION, toMs(timestamp), group.id, eventTid);
         };
         printCpuCoreProcessEvent(prevTid, 'E');
         printCpuCoreProcessEvent(nextTid, 'B');
+
+        // TODO: look into flow events?
+        if (!isFilteredByPid(prevPid)) {
+            printer.writeEvent(
+                R"({"name": "sched_switch", "ph": "B", "ts" : %.*g, "pid": %ld, "tid": %ld, "cat": "sched", "args": {"out": {"next_comm": "%.*s", "next_pid": %ld, "next_tid": %ld}}})",
+                TIMESTAMP_PRECISION, toMs(timestamp), prevPid, prevTid, nextComm.size(), nextComm.data(), nextPid,
+                nextTid);
+        }
+        if (!isFilteredByPid(nextPid)) {
+            printer.writeEvent(
+                R"({"name": "sched_switch", "ph": "E", "ts" : %.*g, "pid": %ld, "tid": %ld, "cat": "sched", "args": {"in": {"prev_comm": "%.*s", "prev_pid": %ld, "prev_tid": %ld}}})",
+                TIMESTAMP_PRECISION, toMs(timestamp), nextPid, nextTid, prevComm.size(), nextComm.data(), prevPid,
+                prevTid);
+        }
     }
 
     void cpuFrequency(uint64_t cpuId, uint64_t frequency, int64_t timestamp)
@@ -590,7 +792,7 @@ struct Context
         const auto group = dataFor(CounterGroup::Block);
         const auto eventTid = BLOCK_TID_OFFFSET - dev;
         if (!device.printedDeviceName) {
-            printEvent(
+            printer.writeEvent(
                 R"({"name": "thread_name", "ph": "M", "pid": %ld, "tid": %ld, "args": { "name": "%s requests" }})",
                 group.id, eventTid, device.name.c_str());
             device.printedDeviceName = true;
@@ -600,14 +802,14 @@ struct Context
         device.requests[sector] = {bytes, std::string(comm), tid};
         printCount(CounterGroup::Block, device.name + " bytes pending", device.bytesPending, timestamp);
 
-        printEvent(
+        printer.writeEvent(
             R"#({"name": "%.*s (%ld)", "ph": "B", "ts": %.*g, "pid": %ld, "tid": %ld, "cat": "block", "args": {"sector": %lu, "nr_sector": %lu, "bytes": %lu, "rwbs": "%s"}})#",
             comm.size(), comm.data(), tid, TIMESTAMP_PRECISION, toMs(timestamp), group.id, eventTid, sector, nr_sector,
             bytes, rwbsToString(rwbs).c_str());
 
         auto& pidData = pids[pid];
         pidData.blockIoBytesPending += bytes;
-        printEvent(
+        printer.writeEvent(
             R"({"name": "block I/O bytes pending", "ph": "C", "ts": %.*g, "pid": %ld, "tid": %ld, "args": {"value": %ld}})",
             TIMESTAMP_PRECISION, toMs(timestamp), pid, pid, pidData.blockIoBytesPending);
     }
@@ -616,7 +818,7 @@ struct Context
     {
         finishBlockRequest(
             dev, sector, timestamp, [this](const auto& comm, auto tid, auto groupId, auto eventTid, auto timestamp) {
-                printEvent(
+                printer.writeEvent(
                     R"#({"name": "%s (%ld)", "ph": "E", "ts": %.*g, "pid": %ld, "tid": %ld, "cat": "block", "args": {"error": "requeue"}})#",
                     comm.c_str(), tid, TIMESTAMP_PRECISION, toMs(timestamp), groupId, eventTid);
             });
@@ -627,7 +829,7 @@ struct Context
         finishBlockRequest(
             dev, sector, timestamp,
             [error, this](const auto& comm, auto tid, auto groupId, auto eventTid, auto timestamp) {
-                printEvent(
+                printer.writeEvent(
                     R"#({"name": "%s (%ld)", "ph": "E", "ts": %.*g, "pid": %ld, "tid": %ld, "cat": "block", "args": {"error": %ld}})#",
                     comm.c_str(), tid, TIMESTAMP_PRECISION, toMs(timestamp), groupId, eventTid, error);
             });
@@ -714,7 +916,7 @@ private:
         const auto pid = this->pid(tid);
         auto& pidData = pids[pid];
         pidData.blockIoBytesPending -= bytes;
-        printEvent(
+        printer.writeEvent(
             R"({"name": "block I/O bytes pending", "ph": "C", "ts": %.*g, "pid": %ld, "tid": %ld, "args": {"value": %ld}})",
             TIMESTAMP_PRECISION, toMs(timestamp), pid, pid, pidData.blockIoBytesPending);
 
@@ -732,8 +934,9 @@ private:
         else
             anonMmapped -= len;
 
-        printEvent(R"({"name": "anon mmapped", "ph": "C", "ts": %.*g, "pid": %ld, "tid": %ld, "args": {"value": %ld}})",
-                   TIMESTAMP_PRECISION, toMs(timestamp), pid, pid, anonMmapped);
+        printer.writeEvent(
+            R"({"name": "anon mmapped", "ph": "C", "ts": %.*g, "pid": %ld, "tid": %ld, "args": {"value": %ld}})",
+            TIMESTAMP_PRECISION, toMs(timestamp), pid, pid, anonMmapped);
     }
     void count(std::string_view name, std::string_view category)
     {
@@ -793,11 +996,12 @@ private:
         const auto groupIndex = static_cast<std::underlying_type_t<CounterGroup>>(counterGroup);
         auto& group = groups[groupIndex];
         if (!group.namePrinted) {
-            printEvent(
+            printer.writeEvent(
                 R"({"name": "process_sort_index", "ph": "M", "pid": %1$ld, "tid": %1$ld, "args": { "sort_index": %1$ld }})",
                 group.id);
-            printEvent(R"({"name": "process_name", "ph": "M", "pid": %1$ld, "tid": %1$ld, "args": { "name": "%2$s" }})",
-                       group.id, group.name);
+            printer.writeEvent(
+                R"({"name": "process_name", "ph": "M", "pid": %1$ld, "tid": %1$ld, "args": { "name": "%2$s" }})",
+                group.id, group.name);
             group.namePrinted = true;
         }
         return group;
@@ -810,8 +1014,8 @@ private:
         const auto group = dataFor(counterGroup);
         count(name, group.name);
 
-        printEvent(R"({"name": "%.*s", "ph": "C", "ts": %.*g, "pid": %ld, "tid": %ld, "args": {"value": %ld}})",
-                   name.size(), name.data(), TIMESTAMP_PRECISION, toMs(timestamp), group.id, group.id, value);
+        printer.writeEvent(R"({"name": "%.*s", "ph": "C", "ts": %.*g, "pid": %ld, "tid": %ld, "args": {"value": %ld}})",
+                           name.size(), name.data(), TIMESTAMP_PRECISION, toMs(timestamp), group.id, group.id, value);
     }
 
     struct CoreData
@@ -879,7 +1083,6 @@ private:
     KMemAlloc currentCached;
     std::unordered_map<uint64_t, uint64_t> kmemPages;
     uint64_t currentKmemPages = 0;
-    bool firstEvent = true;
     struct EventStats
     {
         std::string name;
@@ -958,19 +1161,7 @@ struct Event
             const auto prev_comm = get_char_array(event, event_fields_scope, "prev_comm").value();
             context->printName(prev_tid, prev_pid, prev_comm, timestamp);
 
-            context->schedSwitch(cpuId, prev_tid, next_tid, timestamp);
-
-            // TODO: look into flow events?
-            if (!context->isFilteredByPid(prev_pid) && !isFilteredByTime) {
-                context->printEvent(
-                    R"({"name": "sched_switch", "ph": "B", "ts" : %.*g, "pid": %ld, "tid": %ld, "cat": "sched", "args": {"out": {"next_comm": "%s", "next_pid": %ld, "next_tid": %ld}}})",
-                    TIMESTAMP_PRECISION, context->toMs(timestamp), prev_pid, prev_tid, next_comm, next_pid, next_tid);
-            }
-            if (!context->isFilteredByPid(next_pid) && !isFilteredByTime) {
-                context->printEvent(
-                    R"({"name": "sched_switch", "ph": "E", "ts" : %.*g, "pid": %ld, "tid": %ld, "cat": "sched", "args": {"in": {"prev_comm": "%s", "prev_pid": %ld, "prev_tid": %ld}}})",
-                    TIMESTAMP_PRECISION, context->toMs(timestamp), next_pid, next_tid, prev_comm, prev_pid, prev_tid);
-            }
+            context->schedSwitch(prev_tid, prev_pid, prev_comm, next_tid, next_pid, next_comm, cpuId, timestamp);
         } else if (name == "sched_process_fork") {
             const auto parent_pid = get_int64(event, event_fields_scope, "parent_pid").value();
             const auto child_tid = get_int64(event, event_fields_scope, "child_tid").value();
@@ -1149,14 +1340,6 @@ struct Event
     bool skipArgs = false;
 };
 
-enum class ArgError
-{
-    UnknownType,
-    UnknownSignedness,
-    UnhandledArrayType,
-    UnhandledType,
-};
-
 template<typename ValueFormatter>
 void addArg(const bt_ctf_event* event, const bt_declaration* decl, const bt_definition* def, ValueFormatter&& formatter)
 {
@@ -1237,17 +1420,11 @@ void printArgs(const bt_ctf_event* event, const bt_definition* scope, ValueForma
 
 struct Formatter
 {
-    Formatter(Context* context, const Event* event)
+    Formatter(ArgsType type, std::string_view label, Context* context, const Event* event)
         : context(context)
         , event(event)
+        , printer(context->printer.argsPrinter(type, label))
     {
-    }
-
-    ~Formatter()
-    {
-        if (!firstField && parentField.empty()) {
-            printf("}");
-        }
     }
 
     void operator()(std::string_view field, int64_t value)
@@ -1273,8 +1450,7 @@ struct Formatter
             }
         }
 #endif
-        newField(field);
-        printf("%ld", value);
+        printer.writeField(field, value);
 
         if (event->category == "syscall") {
             if (field == "fd" && value != -1) {
@@ -1333,15 +1509,10 @@ struct Formatter
 
     void operator()(std::string_view field, uint64_t value)
     {
-        newField(field);
+        printer.writeField(field, value,
+                           isHexField(field) ? IntegerArgFormatFlag::Hexadecimal : IntegerArgFormatFlag::Decimal);
 
-        if (isHexField(field)) {
-            printf(R"("0x%lx")", value);
-        } else {
-            printf("%ld", value);
-        }
-
-        if (inArray && parentField == "fildes" && event->name == "syscall_pipe2") {
+        if (printer.type == ArgsType::Array && printer.label == "fildes" && event->name == "syscall_pipe2") {
             context->setFdFilename(event->pid, value, index == 0 ? "pipe(read)" : "pipe(write)");
         } else if (field == "fd" && event->category == "syscall") {
             (*this)("file", context->fdToFilename(event->pid, static_cast<int64_t>(value)));
@@ -1369,8 +1540,7 @@ struct Formatter
             else if (event->type == 'B')
                 field = "entry_msg";
         }
-        newField(field);
-        writeString(value);
+        printer.writeField(field, value);
         if (event->name == "syscall_openat" && field == "filename") {
             context->setOpenAtFilename(event->tid, value);
         }
@@ -1378,21 +1548,7 @@ struct Formatter
 
     void operator()(std::string_view field, ArgError error, int64_t arg = 0)
     {
-        newField(field);
-        switch (error) {
-        case ArgError::UnknownType:
-            puts(R"("<unknown type>")");
-            break;
-        case ArgError::UnknownSignedness:
-            puts(R"("<unknown signedness>")");
-            break;
-        case ArgError::UnhandledArrayType:
-            printf(R"("<unhandled array type %ld>")", arg);
-            break;
-        case ArgError::UnhandledType:
-            printf(R"("<unhandled type %ld>")", arg);
-            break;
-        }
+        printer.writeField(field, error, arg);
     }
 
     void operator()(std::string_view field, const bt_definition* const* sequence, unsigned numEntries, ctf_type_id type)
@@ -1436,12 +1592,7 @@ struct Formatter
 
         const auto isArray = type == CTF_TYPE_SEQUENCE || type == CTF_TYPE_ARRAY;
 
-        newField(field);
-        putc(isArray ? '[' : '{', stdout);
-
-        Formatter childFormatter(context, event);
-        childFormatter.inArray = isArray;
-        childFormatter.parentField = field;
+        Formatter childFormatter(isArray ? ArgsType::Array : ArgsType::Object, field, context, event);
         for (unsigned i = 0; i < numEntries; ++i) {
             childFormatter.index = i;
             const auto* def = sequence[i];
@@ -1453,44 +1604,12 @@ struct Formatter
             }
             addArg(event->ctf_event, decl, def, childFormatter);
         }
-
-        putc(isArray ? ']' : '}', stdout);
-    }
-
-    void newField(std::string_view field)
-    {
-        if (firstField) {
-            firstField = false;
-            if (parentField.empty())
-                printf(R"(, "args": {)");
-        } else {
-            printf(", ");
-        }
-
-        if (inArray)
-            return;
-
-        writeString(field);
-        printf(": ");
-    }
-
-    void writeString(std::string_view string)
-    {
-        putc('"', stdout);
-        for (auto c : string) {
-            if ((c >= 0 && c <= 0x1F) || c == '"')
-                putc('\\', stdout);
-            putc(c, stdout);
-        }
-        putc('"', stdout);
     }
 
     Context* context;
     const Event* event;
-    bool firstField = true;
-    bool inArray = false;
     unsigned index = 0;
-    std::string_view parentField;
+    JsonArgsPrinter printer;
 };
 
 void Context::parseEvent(bt_ctf_event* ctf_event)
@@ -1508,17 +1627,17 @@ void Context::parseEvent(bt_ctf_event* ctf_event)
     if (isFilteredByType(event.type) || isFiltered(event.name))
         return;
 
-    printEvent(R"({"name": "%.*s", "ph": "%c", "ts": %.*g, "pid": %ld, "tid": %ld)", event.name.size(),
-               event.name.data(), event.type, TIMESTAMP_PRECISION, toMs(event.timestamp), event.pid, event.tid);
+    printer.writeEvent(R"({"name": "%.*s", "ph": "%c", "ts": %.*g, "pid": %ld, "tid": %ld)", event.name.size(),
+                       event.name.data(), event.type, TIMESTAMP_PRECISION, toMs(event.timestamp), event.pid, event.tid);
 
     if (!event.category.empty()) {
-        printf(R"(, "cat": "%.*s")", static_cast<int>(event.category.size()), event.category.data());
+        printer.writeRaw(R"(, "cat": "%.*s")", static_cast<int>(event.category.size()), event.category.data());
     }
 
     if (event.event_fields_scope && !event.skipArgs)
-        printArgs(ctf_event, event.event_fields_scope, Formatter(this, &event));
+        printArgs(ctf_event, event.event_fields_scope, Formatter(ArgsType::Object, "args", this, &event));
 
-    printf("}");
+    printer.writeRaw("}");
 }
 
 int main(int argc, char** argv)
@@ -1550,8 +1669,6 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    printf("{\n  \"traceEvents\": [");
-
     do {
         auto ctf_event = bt_ctf_iter_read_event(iter.get());
         if (!ctf_event)
@@ -1563,8 +1680,6 @@ int main(int argc, char** argv)
             fprintf(stderr, "Failed to parse event: %s\n", exception.what());
         }
     } while (bt_iter_next(bt_ctf_get_iter(iter.get())) == 0);
-
-    printf("\n  ]\n}\n");
 
     context.printStats(std::cerr);
 

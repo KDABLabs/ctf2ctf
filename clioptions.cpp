@@ -36,6 +36,8 @@ CliOptions parseCliOptions(int argc, char** argv)
     args::ArgumentParser parser("Convert binary LTTng/Common Trace Format trace data to JSON in Chrome Trace Format",
                                 "The converted trace data in JSON format is written to stdout.");
     args::HelpFlag helpArg(parser, "help", "Display this help menu", {'h', "help"});
+    args::ValueFlag<std::string> outputFileArg(parser, "path", "Write output to a file instead of stdout.",
+                                               {'o', "output"});
     args::ValueFlagList<std::string> excludeArg(parser, "name substring", "Exclude events with this name",
                                                 {'x', "exclude"});
     args::ValueFlagList<int64_t> pidWhitelistArg(parser, "pid", "Only show events for this process id",
@@ -70,6 +72,7 @@ CliOptions parseCliOptions(int argc, char** argv)
     auto toNs = [](double ms) { return static_cast<int64_t>(ms * 1E3); };
 
     return {
+        args::get(outputFileArg),
         path,
         args::get(excludeArg),
         args::get(pidWhitelistArg),
