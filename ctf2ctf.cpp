@@ -603,9 +603,7 @@ struct Context
             if (pid_it != pids.end()) {
                 if (pid_it->second.anonMmapped > 0) {
                     // reset counters to zero to ensure the graph expands the full width of process lifetime
-                    printer.writeEvent(
-                        R"({"name": "anon mmapped", "ph": "C", "ts": %.*g, "pid": %ld, "tid": %ld, "args": {"value": 0}})",
-                        TIMESTAMP_PRECISION, toMs(timestamp), pid, pid);
+                    printCounterValue("anon mmapped", timestamp, pid, 0);
                 }
                 pids.erase(pid_it);
             }
@@ -619,9 +617,7 @@ struct Context
     {
         auto& pageFaults = pids[pid].pageFaults;
         pageFaults++;
-        printer.writeEvent(
-            R"({"name": "page faults", "ph": "C", "ts": %.*g, "pid": %ld, "tid": %ld, "args": {"value": %lu}})",
-            TIMESTAMP_PRECISION, toMs(timestamp), pid, pid, pageFaults);
+        printCounterValue("page faults", timestamp, pid, pageFaults);
     }
 
     void printName(int64_t tid, int64_t pid, std::string_view name, int64_t timestamp)
@@ -809,9 +805,7 @@ struct Context
 
         auto& pidData = pids[pid];
         pidData.blockIoBytesPending += bytes;
-        printer.writeEvent(
-            R"({"name": "block I/O bytes pending", "ph": "C", "ts": %.*g, "pid": %ld, "tid": %ld, "args": {"value": %ld}})",
-            TIMESTAMP_PRECISION, toMs(timestamp), pid, pid, pidData.blockIoBytesPending);
+        printCounterValue("block I/O bytes pending", timestamp, pid, pidData.blockIoBytesPending);
     }
 
     void blockRqRequeue(uint64_t dev, uint64_t sector, int64_t timestamp)
@@ -916,9 +910,7 @@ private:
         const auto pid = this->pid(tid);
         auto& pidData = pids[pid];
         pidData.blockIoBytesPending -= bytes;
-        printer.writeEvent(
-            R"({"name": "block I/O bytes pending", "ph": "C", "ts": %.*g, "pid": %ld, "tid": %ld, "args": {"value": %ld}})",
-            TIMESTAMP_PRECISION, toMs(timestamp), pid, pid, pidData.blockIoBytesPending);
+        printCounterValue("block I/O bytes pending", timestamp, pid, pidData.blockIoBytesPending);
 
         device.requests.erase(it);
     }
@@ -934,9 +926,7 @@ private:
         else
             anonMmapped -= len;
 
-        printer.writeEvent(
-            R"({"name": "anon mmapped", "ph": "C", "ts": %.*g, "pid": %ld, "tid": %ld, "args": {"value": %ld}})",
-            TIMESTAMP_PRECISION, toMs(timestamp), pid, pid, anonMmapped);
+        printCounterValue("anon mmapped", timestamp, pid, anonMmapped);
     }
     void count(std::string_view name, std::string_view category)
     {
@@ -1014,8 +1004,13 @@ private:
         const auto group = dataFor(counterGroup);
         count(name, group.name);
 
-        printer.writeEvent(R"({"name": "%.*s", "ph": "C", "ts": %.*g, "pid": %ld, "tid": %ld, "args": {"value": %ld}})",
-                           name.size(), name.data(), TIMESTAMP_PRECISION, toMs(timestamp), group.id, group.id, value);
+        printCounterValue(name, timestamp, group.id, value);
+    }
+
+    void printCounterValue(std::string_view name, int64_t timestamp, int64_t pid, int64_t value)
+    {
+        printer.writeEvent(R"({"name": "%*.s", "ph": "C", "ts": %.*g, "pid": %ld, "tid": %ld, "args": {"value": %ld}})",
+                           name.size(), name.data(), TIMESTAMP_PRECISION, toMs(timestamp), pid, pid, value);
     }
 
     struct CoreData
