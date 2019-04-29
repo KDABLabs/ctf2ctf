@@ -88,6 +88,57 @@ void installSignalHandler()
 #endif
 }
 
+struct ErrorOutput
+{
+    std::ostream& out(std::string_view prefix, std::string_view file, int line)
+    {
+        if (m_lastWasProgress)
+            std::cerr << '\n';
+        m_lastWasProgress = false;
+        return std::cerr << prefix << " (" << file << ':' << line << "): ";
+    }
+
+    std::ostream& progress()
+    {
+        if (m_lastWasProgress)
+            return std::cerr << '\r';
+
+        m_lastWasProgress = true;
+        return std::cerr;
+    }
+
+    static ErrorOutput& self()
+    {
+        static ErrorOutput out;
+        return out;
+    }
+
+private:
+    bool m_lastWasProgress = false;
+};
+
+struct EndWithNewline
+{
+    EndWithNewline(std::ostream &out)
+        : out(out)
+    {}
+    ~EndWithNewline()
+    {
+        out << '\n';
+    }
+    template<typename T>
+    std::ostream &operator<<(T&& arg)
+    {
+        return out << arg;
+    }
+    std::ostream &out;
+};
+
+#define ERROR() EndWithNewline(ErrorOutput::self().out("ERROR", __FILE__, __LINE__))
+#define WARNING() EndWithNewline(ErrorOutput::self().out("WARNING", __FILE__, __LINE__))
+#define DEBUG() EndWithNewline(ErrorOutput::self().out("DEBUG", __FILE__, __LINE__))
+#define PROGRESS() ErrorOutput::self().progress()
+
 // cf. lttng-modules/instrumentation/events/lttng-module/block.h
 std::string rwbsToString(uint64_t rwbs)
 {
@@ -921,7 +972,7 @@ struct Context
         if (!options.enableStatistics)
             return;
 
-        out << "Trace Data Statistics:\n\n";
+        out << "\n\nTrace Data Statistics:\n\n";
 
         auto printSortedStats = [&out](const auto& stats) {
             auto sortedStats = stats;
@@ -1166,6 +1217,8 @@ private:
     };
     std::vector<CategoryStats> categoryStats;
     int64_t firstTimestamp = 0;
+    int64_t firstProgressTimestamp = 0;
+    int64_t lastProgressTimestamp = 0;
 };
 
 struct Event
@@ -1179,7 +1232,7 @@ struct Event
     {
         auto stream_packet_context_scope = bt_ctf_get_top_level_scope(event, BT_STREAM_PACKET_CONTEXT);
         if (!stream_packet_context_scope)
-            fprintf(stderr, "failed to get stream packet context scope\n");
+            WARNING() << "failed to get stream packet context scope";
 
         cpuId = get_uint64(event, stream_packet_context_scope, "cpu_id").value();
 
@@ -1187,7 +1240,7 @@ struct Event
         pid = context->pid(tid);
 
         if (!event_fields_scope) {
-            fprintf(stderr, "failed to get event fields scope\n");
+            WARNING() << "failed to get event fields scope";
             return;
         }
 
@@ -1474,14 +1527,14 @@ void printArgs(const bt_ctf_event* event, const bt_definition* scope, ValueForma
     unsigned int fields = 0;
     const bt_definition* const* list = nullptr;
     if (bt_ctf_get_field_list(event, scope, &list, &fields) != 0) {
-        fprintf(stderr, "failed to read field list\n");
+        WARNING() << "failed to read field list";
         return;
     }
     for (unsigned int i = 0; i < fields; ++i) {
         auto def = list[i];
         auto decl = bt_ctf_get_decl_from_def(def);
         if (!decl) {
-            fprintf(stderr, "invalid declaration for field %u\n", i);
+            WARNING() << "invalid declaration for field " << i;
             continue;
         }
         addArg(event, decl, def, formatter);
@@ -1638,19 +1691,17 @@ struct Formatter
                 const auto* def = sequence[i];
                 const auto* decl = bt_ctf_get_decl_from_def(def);
                 if (!decl) {
-                    fprintf(stderr, "invalid declaration for field %.*s[%u]\n", static_cast<int>(field.size()),
-                            field.data(), i);
+                    WARNING() << "invalid declaration for field" << field;
                     break;
                 }
                 const auto type = bt_ctf_field_type(decl);
                 if (type != CTF_TYPE_INTEGER) {
-                    std::cerr << "unexpected sequence type for qt tracepoint " << field << ": " << type << std::endl;
+                    WARNING() << "unexpected sequence type for qt tracepoint " << field << ": " << type;
                     break;
                 }
                 const auto signedness = bt_ctf_get_int_signedness(decl);
                 if (signedness != 0) {
-                    std::cerr << "unexpected sequence signedness for qt tracepoint " << field << ": " << signedness
-                              << std::endl;
+                    WARNING() << "unexpected sequence signedness for qt tracepoint " << field << ": " << signedness;
                     break;
                 }
 #if Qt5Gui_FOUND
@@ -1675,8 +1726,7 @@ struct Formatter
             const auto* def = sequence[i];
             const auto* decl = bt_ctf_get_decl_from_def(def);
             if (!decl) {
-                fprintf(stderr, "invalid declaration for field %.*s[%u]\n", static_cast<int>(field.size()),
-                        field.data(), i);
+                WARNING() << "invalid declaration for field " << field;
                 break;
             }
             addArg(event->ctf_event, decl, def, childFormatter);
@@ -1710,6 +1760,17 @@ void Context::parseEvent(bt_ctf_event* ctf_event)
         if (event.event_fields_scope && !event.skipArgs)
             printArgs(ctf_event, event.event_fields_scope,
                       Formatter(printer.argsPrinter(ArgsType::Object, "args"), this, &event));
+    }
+
+    if (!firstProgressTimestamp)
+    {
+        firstProgressTimestamp = event.timestamp;
+        lastProgressTimestamp = event.timestamp;
+    }
+    else if (lastProgressTimestamp && event.timestamp - lastProgressTimestamp > 1E6)
+    {
+        PROGRESS() << "parsed " << std::fixed << std::setprecision(3) << 1E-9 * (event.timestamp - firstProgressTimestamp) << 's';
+        lastProgressTimestamp = event.timestamp;
     }
 }
 }
@@ -1752,7 +1813,7 @@ int main(int argc, char** argv)
         try {
             context.parseEvent(ctf_event);
         } catch (const std::exception& exception) {
-            fprintf(stderr, "Failed to parse event: %s\n", exception.what());
+            WARNING() << "failed to parse event: " << exception.what();
         }
     } while (bt_iter_next(bt_ctf_get_iter(iter.get())) == 0 && !s_shutdownRequested);
 
