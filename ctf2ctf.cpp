@@ -33,6 +33,7 @@
 #include <cmath>
 #include <cstdio>
 #include <stdio_ext.h>
+#include <csignal>
 
 #include <algorithm>
 #include <filesystem>
@@ -57,6 +58,35 @@
 #include <QMetaEnum>
 #include <QString>
 #endif
+
+namespace
+{
+volatile std::sig_atomic_t s_shutdownRequested = 0;
+
+void shutdownGracefully(int sig)
+{
+    if (!s_shutdownRequested) {
+        s_shutdownRequested = 1;
+        return;
+    }
+
+    // re-raise signal with default handler and trigger program termination
+    std::signal(sig, SIG_DFL);
+    std::raise(sig);
+}
+
+void installSignalHandler()
+{
+#ifdef SIGHUP
+    std::signal(SIGHUP, shutdownGracefully);
+#endif
+#ifdef SIGINT
+    std::signal(SIGINT, shutdownGracefully);
+#endif
+#ifdef SIGTERM
+    std::signal(SIGTERM, shutdownGracefully);
+#endif
+}
 
 // cf. lttng-modules/instrumentation/events/lttng-module/block.h
 std::string rwbsToString(uint64_t rwbs)
@@ -1682,6 +1712,7 @@ void Context::parseEvent(bt_ctf_event* ctf_event)
                       Formatter(printer.argsPrinter(ArgsType::Object, "args"), this, &event));
     }
 }
+}
 
 int main(int argc, char** argv)
 {
@@ -1691,6 +1722,7 @@ int main(int argc, char** argv)
     __fsetlocking(stdin, FSETLOCKING_BYCALLER);
 
     Context context(parseCliOptions(argc, argv));
+    installSignalHandler();
 
     auto ctx = wrap(bt_context_create(), bt_context_put);
 
@@ -1722,7 +1754,7 @@ int main(int argc, char** argv)
         } catch (const std::exception& exception) {
             fprintf(stderr, "Failed to parse event: %s\n", exception.what());
         }
-    } while (bt_iter_next(bt_ctf_get_iter(iter.get())) == 0);
+    } while (bt_iter_next(bt_ctf_get_iter(iter.get())) == 0 && !s_shutdownRequested);
 
     context.printStats(std::cerr);
 
