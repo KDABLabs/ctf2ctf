@@ -434,12 +434,12 @@ struct Context
     static constexpr const uint64_t PAGE_SIZE = 4096;
 
     bool reportedBrokenTracefString = false;
-    CliOptions options;
     JsonPrinter printer;
+    CliOptions options;
 
     Context(CliOptions options)
-        : options(std::move(options))
-        , printer(options.outputFile)
+        : printer(options.outputFile)
+        , options(std::move(options))
     {
         cores.reserve(32);
         pids.reserve(1024);
