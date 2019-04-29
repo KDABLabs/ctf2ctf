@@ -1806,6 +1806,9 @@ int main(int argc, char** argv)
     }
 
     do {
+        if (auto lost = bt_ctf_get_lost_events_count(iter.get()))
+            WARNING() << "lost " << lost << " events - this can corrupt the results";
+
         auto ctf_event = bt_ctf_iter_read_event(iter.get());
         if (!ctf_event)
             break;
