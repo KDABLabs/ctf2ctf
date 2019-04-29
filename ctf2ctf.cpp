@@ -398,6 +398,10 @@ public:
     {
         if (!firstEvent)
             writeSuffix();
+        if (out != stderr && out != stdout)
+            fclose(out);
+        else
+            fflush(out);
     }
 
     JsonArgsPrinter eventPrinter()
