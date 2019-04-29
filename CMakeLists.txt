@@ -37,6 +37,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wpedantic")
 
 configure_file(config.h.in ${CMAKE_CURRENT_BINARY_DIR}/config.h @ONLY)
+configure_file(ctf2ctf-gz.sh.in ${CMAKE_CURRENT_BINARY_DIR}/ctf2ctf-gz @ONLY)
 
 add_executable(ctf2ctf ctf2ctf.cpp clioptions.cpp)
 target_link_libraries(ctf2ctf ${BABELTRACE_LIBRARIES} -lstdc++fs)
