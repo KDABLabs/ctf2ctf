@@ -1700,15 +1700,25 @@ struct Formatter
                     break;
                 }
                 const auto signedness = bt_ctf_get_int_signedness(decl);
-                if (signedness != 0) {
+                switch (signedness) {
+                case 0:
+#if Qt5Gui_FOUND
+                    utf16String.append(QChar(static_cast<char16_t>(bt_ctf_get_uint64(def))));
+#else
+                    string.push_back(static_cast<char>(bt_ctf_get_uint64(def)));
+#endif
+                    break;
+                case 1:
+#if Qt5Gui_FOUND
+                    utf16String.append(QChar(static_cast<char16_t>(bt_ctf_get_int64(def))));
+#else
+                    string.push_back(static_cast<char>(bt_ctf_get_int64(def)));
+#endif
+                    break;
+                default:
                     WARNING() << "unexpected sequence signedness for qt tracepoint " << field << ": " << signedness;
                     break;
                 }
-#if Qt5Gui_FOUND
-                utf16String.append(QChar(static_cast<char16_t>(bt_ctf_get_uint64(def))));
-#else
-                string.push_back(static_cast<char>(bt_ctf_get_uint64(def)));
-#endif
             }
 #if Qt5Gui_FOUND
             string = utf16String.toStdString();
