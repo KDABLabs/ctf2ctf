@@ -391,9 +391,28 @@ private:
         fprintf(out, ": ");
     }
 
-    void writeValue(int64_t value)
+    void writeValue(int64_t value, int base = 10)
     {
-        fprintf(out, "%ld", value);
+        switch (base) {
+        case 8:
+            if (value < 0)
+                fprintf(out, "\"-0x%lo\"", -static_cast<uint64_t>(value));
+            else
+                fprintf(out, "\"0x%lo\"", static_cast<uint64_t>(value));
+            break;
+        case 16:
+            if (value < 0)
+                fprintf(out, "\"-0x%lx\"", -static_cast<uint64_t>(value));
+            else
+                fprintf(out, "\"0x%lx\"", static_cast<uint64_t>(value));
+            break;
+        default:
+            WARNING() << "unhandled integer base: " << base;
+            [[fallthrough]];
+        case 10:
+            fprintf(out, "%lu", value);
+            break;
+        }
     }
 
     void writeValue(double value)
@@ -401,14 +420,21 @@ private:
         fprintf(out, "%.*g", TIMESTAMP_PRECISION, value);
     }
 
-    void writeValue(uint64_t value, IntegerArgFormatFlag format = IntegerArgFormatFlag::Decimal)
+    void writeValue(uint64_t value, int base = 10)
     {
-        switch (format) {
-        case IntegerArgFormatFlag::Decimal:
+        switch (base) {
+        case 8:
+            fprintf(out, "%lo", value);
+            break;
+        case 16:
+            fprintf(out, "\"0x%lx\"", value);
+            break;
+        default:
+            WARNING() << "unhandled integer base: " << base;
+            [[fallthrough]];
+        case 10:
             fprintf(out, "%lu", value);
             break;
-        case IntegerArgFormatFlag::Hexadecimal:
-            fprintf(out, "\"0x%lx\"", value);
         }
     }
 
@@ -1493,10 +1519,10 @@ void addArg(const bt_ctf_event* event, const bt_declaration* decl, const bt_defi
     case CTF_TYPE_INTEGER:
         switch (bt_ctf_get_int_signedness(decl)) {
         case 0:
-            formatter(field_name, bt_ctf_get_uint64(def));
+            formatter(field_name, bt_ctf_get_uint64(def), bt_ctf_get_int_base(decl));
             break;
         case 1:
-            formatter(field_name, bt_ctf_get_int64(def));
+            formatter(field_name, bt_ctf_get_int64(def), bt_ctf_get_int_base(decl));
             break;
         default:
             formatter(field_name, ArgError::UnknownSignedness);
@@ -1561,7 +1587,7 @@ struct Formatter
     {
     }
 
-    void operator()(std::string_view field, int64_t value)
+    void operator()(std::string_view field, int64_t value, int base)
     {
 #if Qt5Gui_FOUND
         if (startsWith(event->category, "qt")) {
@@ -1584,7 +1610,7 @@ struct Formatter
             }
         }
 #endif
-        printer.writeField(field, value);
+        printer.writeField(field, value, base);
 
         if (event->category == "syscall") {
             if (field == "fd" && value != -1) {
@@ -1600,57 +1626,9 @@ struct Formatter
         }
     }
 
-    bool isHexField(std::string_view field) const
+    void operator()(std::string_view field, uint64_t value, int base)
     {
-        if (event->category == "kmem") {
-            if (contains({"call_site", "ptr", "page"}, field))
-                return true;
-        } else if (event->category == "syscall") {
-            if (contains({"addr", "buf", "start"}, field))
-                return true;
-
-            if (event->name == "syscall_rt_sigprocmask" && contains({"nset", "oset"}, field))
-                return true;
-
-            if (event->name == "syscall_futex" && contains({"uaddr", "uaddr2"}, field))
-                return true;
-
-            if (event->name == "syscall_mmap" && field == "ret")
-                return true;
-
-            if (field == "msg" && (event->name == "syscall_sendmsg" || event->name == "syscall_recvmsg"))
-                return true;
-
-            if (event->name == "syscall_ppoll" && field == "tsp")
-                return true;
-
-            if (endsWith(event->name, "stat") && field == "statbuf")
-                return true;
-        } else if (startsWith(event->category, "qt")) {
-            if (contains({"object", "event", "sender", "receiver", "slotObject"}, field))
-                return true;
-
-            if (event->name == "qtgui:QImageReader_read_reading" && field == "reader")
-                return true;
-        } else if (event->category == "x86_exceptions_page_fault" && contains({"address", "ip"}, field)) {
-            return true;
-        } else if (event->category == "lttng_ust_statedump" && field == "baddr") {
-            return true;
-        } else if (contains({"timer", "workqueue"}, event->category)) {
-            return true;
-        } else if (event->category == "skb" && contains({"skbaddr", "location"}, field)) {
-            return true;
-        } else if (event->category == "block" && field == "sector") {
-            return true;
-        }
-
-        return false;
-    }
-
-    void operator()(std::string_view field, uint64_t value)
-    {
-        printer.writeField(field, value,
-                           isHexField(field) ? IntegerArgFormatFlag::Hexadecimal : IntegerArgFormatFlag::Decimal);
+        printer.writeField(field, value, base);
 
         if (printer.type == ArgsType::Array && printer.label == "fildes" && event->name == "syscall_pipe2") {
             context->setFdFilename(event->pid, value, index == 0 ? "pipe(read)" : "pipe(write)");
