@@ -472,7 +472,7 @@ public:
         if (auto fd = fopen(output.c_str(), "w"))
             out = fd;
         else
-            fprintf(stderr, "failed to open %s: %s\n", output.c_str(), strerror(errno));
+            ERROR() << "failed to open " << output << ": " << strerror(errno);
     }
 
     ~JsonPrinter()
@@ -1398,9 +1398,9 @@ struct Event
         } else if (name == "lttng_ust_tracef:event") {
             const auto msg = std::string_view(get_string(event, event_fields_scope, "msg").value());
             if (!msg.data() && !context->reportedBrokenTracefString) {
-                std::cerr << "failed to read lttng_ust_tracef:event.msg\n"
+                WARNING() << "failed to read lttng_ust_tracef:event.msg\n"
                           << "please build babeltrace with https://github.com/efficios/babeltrace/pull/98 applied to "
-                             "fix this\n";
+                             "fix this";
                 context->reportedBrokenTracefString = true;
             } else {
                 auto new_name = msg.substr(0, msg.find(' '));
@@ -1812,7 +1812,7 @@ int main(int argc, char** argv)
     findMetadataFiles(context.options.path, [&ctx, &hasTrace](const char* path) {
         auto trace_id = bt_context_add_trace(ctx.get(), path, "ctf", nullptr, nullptr, nullptr);
         if (trace_id < 0)
-            fprintf(stderr, "failed to open trace: %s\n", path);
+            ERROR() << "failed to open trace: " << path;
         else
             hasTrace = true;
     });
@@ -1822,7 +1822,7 @@ int main(int argc, char** argv)
 
     auto iter = wrap(bt_ctf_iter_create(ctx.get(), nullptr, nullptr), bt_ctf_iter_destroy);
     if (!iter) {
-        fprintf(stderr, "failed to create iterator\n");
+        ERROR() << "failed to create iterator";
         return 1;
     }
 
