@@ -17,15 +17,14 @@ done
 
 echo "data will be written to $output"
 
-cd $(dirname $0)
-
 # we will communicate through a named pipe
 pipe=/tmp/ctf2ctf.$$
 mkfifo "$pipe"
 trap "rm $pipe" EXIT
 
 # send to background
-./ctf2ctf -o $pipe $args &
+
+$(dirname $(readlink -f $0))/ctf2ctf -o $pipe $args &
 pid=$!
 
 # spawn gzip and send to background
