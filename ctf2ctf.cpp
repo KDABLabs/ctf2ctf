@@ -1378,8 +1378,10 @@ struct Event
         } else if (name == "block_rq_complete") {
             const auto dev = get_uint64(event, event_fields_scope, "dev").value();
             const auto sector = get_uint64(event, event_fields_scope, "sector").value();
-            const auto error = get_int64(event, event_fields_scope, "error").value();
-            context->blockRqComplete(dev, sector, error, timestamp);
+            auto error = get_int64(event, event_fields_scope, "error");
+            if (!error)
+                error = get_int64(event, event_fields_scope, "errors");
+            context->blockRqComplete(dev, sector, error.value(), timestamp);
         } else if (name == "block_rq_requeue") {
             const auto dev = get_uint64(event, event_fields_scope, "dev").value();
             const auto sector = get_uint64(event, event_fields_scope, "sector").value();
