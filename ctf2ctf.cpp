@@ -601,14 +601,23 @@ struct Context
 
     std::string_view fdToFilename(int64_t pid, int64_t fd) const
     {
+        std::string_view filename = "??";
+        if (fd == 0)
+            filename = "stdin";
+        else if (fd == 1)
+            filename = "stdout";
+        else if (fd == 2)
+            filename = "stderr";
+
         auto pid_it = pids.find(pid);
         if (pid_it == pids.end())
-            return "??";
+            return filename;
         const auto& fds = pid_it->second.fdToFilename;
         auto fd_it = fds.find(fd);
         if (fd_it == fds.end())
-            return "??";
-        return fd_it->second;
+            return filename;
+        filename = fd_it->second;
+        return filename;
     }
 
     void setIrqName(uint64_t irq, std::string_view name, std::string_view action)
