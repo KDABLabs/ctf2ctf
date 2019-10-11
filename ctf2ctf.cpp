@@ -442,7 +442,7 @@ private:
     {
         putc('"', out);
         for (auto c : string) {
-            if ((c >= 0 && c <= 0x1F) || c == '"')
+            if ((c >= 0 && c <= 0x1F) || c == '"' || c == '\\')
                 putc('\\', out);
             putc(c, out);
         }
