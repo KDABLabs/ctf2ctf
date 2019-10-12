@@ -221,11 +221,11 @@ bool endsWith(std::string_view string, std::string_view suffix)
     return string.size() >= suffix.size() && std::equal(suffix.rbegin(), suffix.rend(), string.rbegin());
 }
 
-bool removeSuffix(std::string_view& name, std::string_view suffix)
+bool removeSuffix(std::string& name, std::string_view suffix)
 {
     if (!endsWith(name, suffix))
         return false;
-    name.remove_suffix(suffix.length());
+    name.resize(name.size() - suffix.length());
     return true;
 }
 
@@ -1298,7 +1298,7 @@ struct Event
             return;
         }
 
-        auto rewriteName = [this](std::string_view& name, std::string_view needle, std::string_view replacement,
+        auto rewriteName = [this](std::string& name, std::string_view needle, std::string_view replacement,
                                   bool atStart) {
             const auto pos = atStart ? 0 : name.find(needle);
 
@@ -1307,13 +1307,11 @@ struct Event
             else if (!atStart && pos == name.npos)
                 return false;
 
-            mutatedName = name;
-            mutatedName.replace(pos, needle.size(), replacement);
-            name = mutatedName;
+            name.replace(pos, needle.size(), replacement);
             return true;
         };
 
-        auto setType = [rewriteName](std::string_view& name) -> char {
+        auto setType = [rewriteName](std::string& name) -> char {
             if (removeSuffix(name, "_entry") || rewriteName(name, "syscall_entry_", "syscall_", true)
                 || rewriteName(name, "_begin_", "_", false) || rewriteName(name, "_before_", "_", false)) {
                 return 'B';
@@ -1448,10 +1446,10 @@ struct Event
                              "fix this";
                 context->reportedBrokenTracefString = true;
             } else {
-                auto new_name = msg.substr(0, msg.find(' '));
+                std::string new_name(msg.substr(0, msg.find(' ')));
                 const auto fullMsg = new_name == msg;
                 if (!new_name.empty() && new_name.back() == ':')
-                    new_name.remove_suffix(1);
+                    new_name.resize(new_name.size() - 1);
                 const auto new_type = setType(new_name);
                 if (new_type != 'i') {
                     name = new_name;
@@ -1463,9 +1461,7 @@ struct Event
             }
         }
 
-        std::string_view name_ref = name;
-        type = setType(name_ref);
-        name = name_ref;
+        type = setType(name);
 
         // TODO: also parse /sys/kernel/debug/tracing/available_events if accessible
         static const auto prefixes = {
@@ -1509,8 +1505,6 @@ struct Event
     const bt_ctf_event* ctf_event = nullptr;
     const bt_definition* event_fields_scope = nullptr;
     std::string name;
-    // when we rewrite the name, this is the source for the string_view
-    std::string mutatedName;
     std::string category;
     int64_t timestamp = 0;
     uint64_t cpuId = 0;
