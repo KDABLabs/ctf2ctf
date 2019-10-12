@@ -540,6 +540,7 @@ private:
     bool firstEvent = true;
 };
 
+struct Event;
 struct Context
 {
     static constexpr const uint64_t PAGE_SIZE = 4096;
@@ -818,6 +819,9 @@ struct Context
     }
 
     void parseEvent(bt_ctf_event* event);
+    void handleEvent(const Event& event);
+    void drainHeldBackEvents(std::vector<Event>& heldBackEvents_forCpu);
+    void drainHeldBackEvents();
 
     enum KMemType
     {
@@ -1254,6 +1258,21 @@ private:
     int64_t firstTimestamp = 0;
     int64_t firstProgressTimestamp = 0;
     int64_t lastProgressTimestamp = 0;
+    /**
+     * Sadly, on some (non-x86?) systems the lttng-ust trace points lead to
+     * a lot of syscall event spam - every lttng-ust event is preceded by a
+     * syscall_getcpu_{entry,exit} and a syscall_clock_gettime_entry and then
+     * followed by a syscall_clock_gettime_exit. This leads to overly large
+     * data files and additionally breaks the UST trace points, as they
+     * are each sandwiched between a begin/end, which makes it impossible to
+     * use them to build their own begin/end pairs.
+     */
+    struct LttngUstCleanupData
+    {
+        std::vector<Event> heldBackEvents;
+        bool ignoreNextClockGettime = false;
+    };
+    std::unordered_map<uint64_t, LttngUstCleanupData> ustCleanup;
 };
 
 struct Event
@@ -1444,7 +1463,9 @@ struct Event
             }
         }
 
-        type = setType(name);
+        std::string_view name_ref = name;
+        type = setType(name_ref);
+        name = name_ref;
 
         // TODO: also parse /sys/kernel/debug/tracing/available_events if accessible
         static const auto prefixes = {
@@ -1487,10 +1508,10 @@ struct Event
 
     const bt_ctf_event* ctf_event = nullptr;
     const bt_definition* event_fields_scope = nullptr;
-    std::string_view name;
+    std::string name;
     // when we rewrite the name, this is the source for the string_view
     std::string mutatedName;
-    std::string_view category;
+    std::string category;
     int64_t timestamp = 0;
     uint64_t cpuId = 0;
     int64_t tid = -1;
@@ -1742,6 +1763,56 @@ void Context::parseEvent(bt_ctf_event* ctf_event)
 {
     const auto event = Event(ctf_event, this);
 
+    auto& ustCleanup_forCpu = ustCleanup[event.cpuId];
+    auto& ignoreNextClockGettime_forCpu = ustCleanup_forCpu.ignoreNextClockGettime;
+    auto& heldBackEvents_forCpu = ustCleanup_forCpu.heldBackEvents;
+
+    if (event.category == "syscall") {
+        if (ignoreNextClockGettime_forCpu && event.name == "syscall_clock_gettime" && event.type == 'E') {
+            ignoreNextClockGettime_forCpu = false;
+            return;
+        }
+        const auto holdBackEvent = [numEvents = heldBackEvents_forCpu.size(), &event]() {
+            if (event.name == "syscall_getcpu") {
+                if (numEvents == 0 && event.type == 'B')
+                    return true;
+                else if (numEvents == 1 && event.type == 'E')
+                    return true;
+            } else if (event.name == "syscall_clock_gettime") {
+                if (numEvents == 2 && event.type == 'B')
+                    return true;
+            }
+            return false;
+        }();
+        if (holdBackEvent) {
+            heldBackEvents_forCpu.push_back(std::move(event));
+            return;
+        }
+    } else if (heldBackEvents_forCpu.size() == 3) {
+        ignoreNextClockGettime_forCpu = true;
+        heldBackEvents_forCpu.clear();
+    }
+
+    drainHeldBackEvents(heldBackEvents_forCpu);
+    handleEvent(event);
+}
+
+void Context::drainHeldBackEvents(std::vector<Event>& heldBackEvents_forCpu)
+{
+    for (const auto& heldBackEvent : heldBackEvents_forCpu)
+        handleEvent(heldBackEvent);
+    heldBackEvents_forCpu.clear();
+}
+
+void Context::drainHeldBackEvents()
+{
+    for (auto& data : ustCleanup)
+        drainHeldBackEvents(data.second.heldBackEvents);
+    ustCleanup.clear();
+}
+
+void Context::handleEvent(const Event& event)
+{
     count(event.name, event.category);
 
     if (event.isFilteredByTime || isFilteredByPid(event.pid))
@@ -1757,7 +1828,7 @@ void Context::parseEvent(bt_ctf_event* ctf_event)
         auto printer = eventPrinter(event.name, event.type, event.timestamp, event.pid, event.tid, event.category);
 
         if (event.event_fields_scope && !event.skipArgs)
-            printArgs(ctf_event, event.event_fields_scope,
+            printArgs(event.ctf_event, event.event_fields_scope,
                       Formatter(printer.argsPrinter(ArgsType::Object, "args"), this, &event));
     }
 
@@ -1818,6 +1889,8 @@ int main(int argc, char** argv)
             WARNING() << "failed to parse event: " << exception.what();
         }
     } while (bt_iter_next(bt_ctf_get_iter(iter.get())) == 0 && !s_shutdownRequested);
+
+    context.drainHeldBackEvents();
 
     context.printStats(std::cerr);
 
