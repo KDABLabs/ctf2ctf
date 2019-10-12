@@ -1863,28 +1863,41 @@ int main(int argc, char** argv)
     if (!hasTrace)
         return 1;
 
-    auto iter = wrap(bt_ctf_iter_create(ctx.get(), nullptr, nullptr), bt_ctf_iter_destroy);
-    if (!iter) {
-        ERROR() << "failed to create iterator";
-        return 1;
-    }
-
-    do {
-        if (auto lost = bt_ctf_get_lost_events_count(iter.get()))
-            WARNING() << "lost " << lost << " events - this can corrupt the results";
-
-        auto ctf_event = bt_ctf_iter_read_event(iter.get());
-        if (!ctf_event)
-            break;
-
-        try {
-            context.parseEvent(ctf_event);
-        } catch (const std::exception& exception) {
-            WARNING() << "failed to parse event: " << exception.what();
+    // loop twice to parse: first parse the lttng_statedump data, then continue onwards
+    for (int i = 0; i < 2; ++i) {
+        auto iter = wrap(bt_ctf_iter_create(ctx.get(), nullptr, nullptr), bt_ctf_iter_destroy);
+        if (!iter) {
+            ERROR() << "failed to create iterator";
+            return 1;
         }
-    } while (bt_iter_next(bt_ctf_get_iter(iter.get())) == 0 && !s_shutdownRequested);
 
-    context.drainHeldBackEvents();
+        do {
+            if (i == 1) {
+                if (auto lost = bt_ctf_get_lost_events_count(iter.get()))
+                    WARNING() << "lost " << lost << " events - this can corrupt the results";
+            }
+
+            auto ctf_event = bt_ctf_iter_read_event(iter.get());
+            if (!ctf_event)
+                break;
+
+            try {
+                if (i == 0) {
+                    std::string_view name(bt_ctf_event_name(ctf_event));
+                    if (!startsWith(name, "lttng_statedump"))
+                        continue;
+                    else if (name == "lttng_statedump_end")
+                        break;
+                }
+
+                context.parseEvent(ctf_event);
+            } catch (const std::exception& exception) {
+                WARNING() << "failed to parse event: " << exception.what();
+            }
+        } while (bt_iter_next(bt_ctf_get_iter(iter.get())) == 0 && !s_shutdownRequested);
+
+        context.drainHeldBackEvents();
+    }
 
     context.printStats(std::cerr);
 
