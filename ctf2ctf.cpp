@@ -442,6 +442,13 @@ private:
     {
         putc('"', out);
         for (auto c : string) {
+            if (c == '\n') {
+                fputs("\\n", out);
+                continue;
+            } else if (c == '\r') {
+                fputs("\\r", out);
+                continue;
+            }
             if ((c >= 0 && c <= 0x1F) || c == '"' || c == '\\')
                 putc('\\', out);
             putc(c, out);
