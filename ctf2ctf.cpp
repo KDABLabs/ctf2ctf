@@ -1320,13 +1320,10 @@ struct Event
 
         auto setType = [rewriteName](std::string& name) -> char {
             if (removeSuffix(name, "_entry") || rewriteName(name, "syscall_entry_", "syscall_", true)
-                || rewriteName(name, "_begin_", "_", false) || rewriteName(name, "_before_", "_", false)
-                || rewriteName(name, "block_rq_issue", "block_rq", true)) {
+                || rewriteName(name, "_begin_", "_", false) || rewriteName(name, "_before_", "_", false)) {
                 return 'B';
             } else if (removeSuffix(name, "_exit") || rewriteName(name, "syscall_exit_", "syscall_", true)
-                       || rewriteName(name, "_end_", "_", false) || rewriteName(name, "_after_", "_", false)
-                       || rewriteName(name, "block_rq_complete", "block_rq", true)
-                       || rewriteName(name, "block_rq_requeue", "block_rq", true)) {
+                       || rewriteName(name, "_end_", "_", false) || rewriteName(name, "_after_", "_", false)) {
                 return 'E';
             } else {
                 return 'i';
