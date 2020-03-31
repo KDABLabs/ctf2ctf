@@ -1121,6 +1121,7 @@ private:
         CPU,
         Memory,
         Block,
+        NUM_COUNTER_GROUP
     };
     struct GroupData
     {
@@ -1135,6 +1136,8 @@ private:
             {"Memory statistics", MEMORY_COUNTER_PID, false},
             {"Block I/O statistics", BLOCK_COUNTER_PID, false},
         };
+        static_assert(std::size(groups) == static_cast<std::size_t>(CounterGroup::NUM_COUNTER_GROUP));
+        assert(counterGroup < NUM_COUNTER_GROUP);
         const auto groupIndex = static_cast<std::underlying_type_t<CounterGroup>>(counterGroup);
         auto& group = groups[groupIndex];
         if (!group.namePrinted) {
