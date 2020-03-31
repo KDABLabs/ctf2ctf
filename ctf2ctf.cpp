@@ -211,6 +211,11 @@ auto get_string(const bt_ctf_event* event, const bt_definition* scope, const cha
     return get(event, scope, name, bt_ctf_get_string);
 }
 
+auto get_float(const bt_ctf_event* event, const bt_definition* scope, const char* name)
+{
+    return get(event, scope, name, bt_ctf_get_float);
+}
+
 bool startsWith(std::string_view string, std::string_view prefix)
 {
     return string.size() >= prefix.size() && std::equal(prefix.begin(), prefix.end(), string.begin());
@@ -762,7 +767,7 @@ struct Context
             if (pid_it != pids.end()) {
                 if (pid_it->second.anonMmapped > 0) {
                     // reset counters to zero to ensure the graph expands the full width of process lifetime
-                    printCounterValue("anon mmapped", timestamp, pid, 0);
+                    printCounterValue("anon mmapped", timestamp, pid, int64_t(0));
                 }
                 pids.erase(pid_it);
             }
@@ -930,6 +935,11 @@ struct Context
         printCount(CounterGroup::CPU, "CPU " + std::to_string(cpuId) + " frequency", frequency, timestamp);
     }
 
+    void cpuUsage(const std::string& label, double usage, int64_t timestamp)
+    {
+        printCount(CounterGroup::CPU, label + " usage", usage, timestamp);
+    }
+
     void blockRqIssue(uint64_t dev, uint64_t sector, uint64_t nr_sector, uint64_t bytes, uint64_t rwbs, int64_t tid,
                       std::string_view comm, int64_t timestamp)
     {
@@ -1033,6 +1043,25 @@ struct Context
 
         out << "\nEvent Category Stats:\n";
         printSortedStats(categoryStats);
+    }
+
+    int64_t generateTidForString(const std::string& string, int64_t timestamp, int64_t pid = -1)
+    {
+        assert(customTidMapping.size() == tids.size());
+        auto& tid = customTidMapping[string];
+        if (tid == 0) {
+            // newly added string, create new mapping
+            tid = customTidMapping.size();
+            if (pid == -1)
+                pid = tid;
+            printName(tid, pid, string, timestamp);
+        }
+        return tid;
+    }
+
+    void printCounterValue(std::string_view name, int64_t timestamp, int64_t pid, Arg value)
+    {
+        printEvent(name, 'C', timestamp, pid, pid, {}, {{"value", value}});
     }
 
 private:
@@ -1147,7 +1176,7 @@ private:
         }
         return group;
     }
-    void printCount(CounterGroup counterGroup, std::string_view name, int64_t value, int64_t timestamp)
+    void printCount(CounterGroup counterGroup, std::string_view name, Arg value, int64_t timestamp)
     {
         if (isFiltered(name) || isFilteredByTime(timestamp))
             return;
@@ -1156,11 +1185,6 @@ private:
         count(name, group.name);
 
         printCounterValue(name, timestamp, group.id, value);
-    }
-
-    void printCounterValue(std::string_view name, int64_t timestamp, int64_t pid, int64_t value)
-    {
-        printEvent(name, 'C', timestamp, pid, pid, {}, {{"value", value}});
     }
 
     JsonArgsPrinter eventPrinter(std::string_view name, char type, int64_t timestamp, int64_t pid, int64_t tid,
@@ -1227,6 +1251,7 @@ private:
         uint64_t blockIoBytesPending = 0;
     };
     std::unordered_map<int64_t, PidData> pids;
+    std::unordered_map<std::string, int64_t> customTidMapping;
     struct IrqData
     {
         std::string name;
@@ -1298,7 +1323,13 @@ struct Event
         if (!stream_packet_context_scope)
             WARNING() << "failed to get stream packet context scope";
 
-        cpuId = get_uint64(event, stream_packet_context_scope, "cpu_id").value();
+        const auto rawCpuId = get_uint64(event, stream_packet_context_scope, "cpu_id");
+        if (!rawCpuId) {
+            parseNonLttngEvent(context);
+            return;
+        }
+
+        cpuId = rawCpuId.value();
 
         tid = context->tid(cpuId);
         pid = context->pid(tid);
@@ -1523,6 +1554,61 @@ struct Event
     char type = 'i';
     bool isFilteredByTime = false;
     bool skipArgs = false;
+
+private:
+    void parseNonLttngEvent(Context* context)
+    {
+        // BEGIN gst-shark
+        if (name == "scheduling") {
+            const auto pad = get_string(ctf_event, event_fields_scope, "pad").value();
+            const auto time = get_uint64(ctf_event, event_fields_scope, "time").value();
+            pid = context->generateTidForString(pad, timestamp);
+            tid = pid;
+            context->printCounterValue(name, timestamp, pid, time);
+        } else if (name == "interlatency") {
+            const auto from_pad = get_string(ctf_event, event_fields_scope, "from_pad").value();
+            const auto to_pad = get_string(ctf_event, event_fields_scope, "to_pad").value();
+            const auto time = get_uint64(ctf_event, event_fields_scope, "time").value();
+            pid = context->generateTidForString(from_pad, timestamp);
+            tid = pid;
+            context->printCounterValue(std::string("interlatency to ") + to_pad, timestamp, pid, time);
+        } else if (name == "proctime") {
+            const auto element = get_string(ctf_event, event_fields_scope, "element").value();
+            const auto time = get_uint64(ctf_event, event_fields_scope, "time").value();
+            pid = context->generateTidForString(element, timestamp);
+            tid = pid;
+            context->printCounterValue(name, timestamp, pid, time);
+        } else if (name == "framerate") {
+            const auto pad = get_string(ctf_event, event_fields_scope, "pad").value();
+            const auto fps = get_uint64(ctf_event, event_fields_scope, "fps").value();
+            pid = context->generateTidForString(pad, timestamp);
+            tid = pid;
+            context->printCounterValue(name, timestamp, pid, fps);
+        } else if (name == "bitrate") {
+            const auto pad = get_string(ctf_event, event_fields_scope, "pad").value();
+            const auto bps = get_uint64(ctf_event, event_fields_scope, "bps").value();
+            pid = context->generateTidForString(pad, timestamp);
+            tid = pid;
+            context->printCounterValue(name, timestamp, pid, bps);
+        } else if (name == "cpuusage") {
+            double totalUsage = 0;
+            uint64_t cpuId = 0;
+            while (true) {
+                const auto cpuName = "cpu" + std::to_string(cpuId);
+                const auto usage = get_float(ctf_event, event_fields_scope, cpuName.c_str());
+                if (!usage)
+                    break;
+                totalUsage += usage.value();
+                context->cpuUsage(cpuName, usage.value(), timestamp);
+                ++cpuId;
+            }
+            context->cpuUsage("total", totalUsage, timestamp);
+        }
+        // END gst-shark
+        else {
+            WARNING() << "unhandled event: " << name;
+        }
+    }
 };
 
 template<typename ValueFormatter>
@@ -1540,6 +1626,9 @@ void addArg(const bt_ctf_event* event, const bt_declaration* decl, const bt_defi
     switch (type) {
     case CTF_TYPE_UNKNOWN:
         formatter(field_name, ArgError::UnknownType);
+        break;
+    case CTF_TYPE_FLOAT:
+        formatter(field_name, bt_ctf_get_float(def));
         break;
     case CTF_TYPE_INTEGER:
         switch (bt_ctf_get_int_signedness(decl)) {
@@ -1692,6 +1781,11 @@ struct Formatter
     void operator()(std::string_view field, ArgError error, int64_t arg = 0)
     {
         printer.writeField(field, error, arg);
+    }
+
+    void operator()(std::string_view field, double value)
+    {
+        printer.writeField(field, value);
     }
 
     void operator()(std::string_view field, const bt_definition* const* sequence, unsigned numEntries, ctf_type_id type)
