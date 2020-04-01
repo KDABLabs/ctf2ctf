@@ -1603,6 +1603,16 @@ private:
                 ++cpuId;
             }
             context->cpuUsage("total", totalUsage, timestamp);
+        } else if (name == "queuelevel") {
+            const auto queue = get_string(ctf_event, event_fields_scope, "queue").value();
+            pid = context->generateTidForString(queue, timestamp);
+            tid = pid;
+            const auto size_buffers = get_uint64(ctf_event, event_fields_scope, "size_buffers").value();
+            context->printCounterValue(name + " buffers", timestamp, pid, size_buffers);
+            const auto size_bytes = get_uint64(ctf_event, event_fields_scope, "size_bytes").value();
+            context->printCounterValue(name + " bytes", timestamp, pid, size_bytes);
+            const auto size_time = get_uint64(ctf_event, event_fields_scope, "size_time").value();
+            context->printCounterValue(name + " time", timestamp, pid, size_time);
         }
         // END gst-shark
         else {
