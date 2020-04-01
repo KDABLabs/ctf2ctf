@@ -812,6 +812,9 @@ struct Context
         if (pid != INVALID_TID) {
             auto& pidName = getName(pid);
             if (pidName.empty() || (tid == pid && pidName != name)) {
+                if (pidName.empty()) {
+                    printEvent("process_sort_index", 'M', timestamp, pid, pid, {}, {{"sort_index", pid}});
+                }
                 pidName = name;
                 printName("process_name");
                 if (tid == pid) {
@@ -1560,12 +1563,25 @@ private:
     void parseNonLttngEvent(Context* context)
     {
         // BEGIN gst-shark
+        static bool gstGroupsGenerated = false;
+        if (!gstGroupsGenerated) {
+            gstGroupsGenerated = true;
+            const auto names = {"scheduling", "interlatency", "proctime", "framerate", "bitrate", "queuelevel"};
+            for (auto&& name : names) {
+                context->generateTidForString(name, timestamp);
+            }
+        }
+        auto countInGroup = [&](auto&& counterName, auto&& value) {
+            const auto groupPid = context->generateTidForString(name, timestamp);
+            context->printCounterValue(counterName, timestamp, groupPid, value);
+        };
         if (name == "scheduling") {
             const auto pad = get_string(ctf_event, event_fields_scope, "pad").value();
             const auto time = get_uint64(ctf_event, event_fields_scope, "time").value();
             pid = context->generateTidForString(pad, timestamp);
             tid = pid;
             context->printCounterValue(name, timestamp, pid, time);
+            countInGroup(pad, time);
         } else if (name == "interlatency") {
             const auto from_pad = get_string(ctf_event, event_fields_scope, "from_pad").value();
             const auto to_pad = get_string(ctf_event, event_fields_scope, "to_pad").value();
@@ -1573,24 +1589,28 @@ private:
             pid = context->generateTidForString(from_pad, timestamp);
             tid = pid;
             context->printCounterValue(std::string("interlatency to ") + to_pad, timestamp, pid, time);
+            countInGroup(std::string(from_pad) + " to " + to_pad, time);
         } else if (name == "proctime") {
             const auto element = get_string(ctf_event, event_fields_scope, "element").value();
             const auto time = get_uint64(ctf_event, event_fields_scope, "time").value();
             pid = context->generateTidForString(element, timestamp);
             tid = pid;
             context->printCounterValue(name, timestamp, pid, time);
+            countInGroup(element, time);
         } else if (name == "framerate") {
             const auto pad = get_string(ctf_event, event_fields_scope, "pad").value();
             const auto fps = get_uint64(ctf_event, event_fields_scope, "fps").value();
             pid = context->generateTidForString(pad, timestamp);
             tid = pid;
             context->printCounterValue(name, timestamp, pid, fps);
+            countInGroup(pad, fps);
         } else if (name == "bitrate") {
             const auto pad = get_string(ctf_event, event_fields_scope, "pad").value();
             const auto bps = get_uint64(ctf_event, event_fields_scope, "bps").value();
             pid = context->generateTidForString(pad, timestamp);
             tid = pid;
             context->printCounterValue(name, timestamp, pid, bps);
+            countInGroup(pad, bps);
         } else if (name == "cpuusage") {
             double totalUsage = 0;
             uint64_t cpuId = 0;
@@ -1612,10 +1632,13 @@ private:
             tid = pid;
             const auto size_buffers = get_uint64(ctf_event, event_fields_scope, "size_buffers").value();
             context->printCounterValue(name + " buffers", timestamp, pid, size_buffers);
+            countInGroup(name + " buffers", size_buffers);
             const auto size_bytes = get_uint64(ctf_event, event_fields_scope, "size_bytes").value();
             context->printCounterValue(name + " bytes", timestamp, pid, size_bytes);
+            countInGroup(name + " bytes", size_bytes);
             const auto size_time = get_uint64(ctf_event, event_fields_scope, "size_time").value();
             context->printCounterValue(name + " time", timestamp, pid, size_time);
+            countInGroup(name + " time", size_time);
         }
         // END gst-shark
         else {
