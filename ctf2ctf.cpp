@@ -1575,9 +1575,10 @@ private:
             const auto groupPid = context->generateTidForString(name, timestamp);
             context->printCounterValue(counterName, timestamp, groupPid, value);
         };
+        auto formatTime = [](uint64_t time) { return static_cast<double>(time) * 1E-9; };
         if (name == "scheduling") {
             const auto pad = get_string(ctf_event, event_fields_scope, "pad").value();
-            const auto time = get_uint64(ctf_event, event_fields_scope, "time").value();
+            const auto time = formatTime(get_uint64(ctf_event, event_fields_scope, "time").value());
             pid = context->generateTidForString(pad, timestamp);
             tid = pid;
             context->printCounterValue(name, timestamp, pid, time);
@@ -1585,14 +1586,14 @@ private:
         } else if (name == "interlatency") {
             const auto from_pad = get_string(ctf_event, event_fields_scope, "from_pad").value();
             const auto to_pad = get_string(ctf_event, event_fields_scope, "to_pad").value();
-            const auto time = get_uint64(ctf_event, event_fields_scope, "time").value();
+            const auto time = formatTime(get_uint64(ctf_event, event_fields_scope, "time").value());
             pid = context->generateTidForString(from_pad, timestamp);
             tid = pid;
             context->printCounterValue(std::string("interlatency to ") + to_pad, timestamp, pid, time);
             countInGroup(std::string(from_pad) + " to " + to_pad, time);
         } else if (name == "proctime") {
             const auto element = get_string(ctf_event, event_fields_scope, "element").value();
-            const auto time = get_uint64(ctf_event, event_fields_scope, "time").value();
+            const auto time = formatTime(get_uint64(ctf_event, event_fields_scope, "time").value());
             pid = context->generateTidForString(element, timestamp);
             tid = pid;
             context->printCounterValue(name, timestamp, pid, time);
@@ -1636,7 +1637,7 @@ private:
             const auto size_bytes = get_uint64(ctf_event, event_fields_scope, "size_bytes").value();
             context->printCounterValue(name + " bytes", timestamp, pid, size_bytes);
             countInGroup(name + " bytes", size_bytes);
-            const auto size_time = get_uint64(ctf_event, event_fields_scope, "size_time").value();
+            const auto size_time = formatTime(get_uint64(ctf_event, event_fields_scope, "size_time").value());
             context->printCounterValue(name + " time", timestamp, pid, size_time);
             countInGroup(name + " time", size_time);
         }
