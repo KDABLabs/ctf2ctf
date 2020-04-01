@@ -1064,6 +1064,18 @@ struct Context
         printEvent(name, 'C', timestamp, pid, pid, {}, {{"value", value}});
     }
 
+    enum SpecialIds
+    {
+        INVALID_TID = -1,
+        CPU_COUNTER_PID = -2,
+        MEMORY_COUNTER_PID = -3,
+        BLOCK_COUNTER_PID = -4,
+        // cpu id * multiplicator gives us a thread id for per-core events
+        CPU_PROCESS_TID_MULTIPLICATOR = -100,
+        // offset - block device id gives us a thread id for per-block events
+        BLOCK_TID_OFFFSET = -2000,
+    };
+
 private:
     template<typename PrintEventCallback>
     void finishBlockRequest(uint64_t dev, uint64_t sector, int64_t timestamp, PrintEventCallback&& callback)
@@ -1134,17 +1146,6 @@ private:
                    current.allocated, timestamp);
     }
 
-    enum SpecialIds
-    {
-        INVALID_TID = -1,
-        CPU_COUNTER_PID = -2,
-        MEMORY_COUNTER_PID = -3,
-        BLOCK_COUNTER_PID = -4,
-        // cpu id * multiplicator gives us a thread id for per-core events
-        CPU_PROCESS_TID_MULTIPLICATOR = -100,
-        // offset - block device id gives us a thread id for per-block events
-        BLOCK_TID_OFFFSET = -2000,
-    };
     enum class CounterGroup
     {
         CPU,
@@ -1603,6 +1604,8 @@ private:
                 ++cpuId;
             }
             context->cpuUsage("total", totalUsage, timestamp);
+            pid = Context::CPU_COUNTER_PID;
+            tid = pid;
         } else if (name == "queuelevel") {
             const auto queue = get_string(ctf_event, event_fields_scope, "queue").value();
             pid = context->generateTidForString(queue, timestamp);
