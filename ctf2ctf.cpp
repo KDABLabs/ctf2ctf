@@ -1628,18 +1628,18 @@ private:
             pid = Context::CPU_COUNTER_PID;
             tid = pid;
         } else if (name == "queuelevel") {
-            const auto queue = get_string(ctf_event, event_fields_scope, "queue").value();
+            const auto queue = std::string(get_string(ctf_event, event_fields_scope, "queue").value());
             pid = context->generateTidForString(queue, timestamp);
             tid = pid;
             const auto size_buffers = get_uint64(ctf_event, event_fields_scope, "size_buffers").value();
             context->printCounterValue(name + " buffers", timestamp, pid, size_buffers);
-            countInGroup(name + " buffers", size_buffers);
+            countInGroup(queue + " buffers", size_buffers);
             const auto size_bytes = get_uint64(ctf_event, event_fields_scope, "size_bytes").value();
             context->printCounterValue(name + " bytes", timestamp, pid, size_bytes);
-            countInGroup(name + " bytes", size_bytes);
+            countInGroup(queue + " bytes", size_bytes);
             const auto size_time = formatTime(get_uint64(ctf_event, event_fields_scope, "size_time").value());
             context->printCounterValue(name + " time", timestamp, pid, size_time);
-            countInGroup(name + " time", size_time);
+            countInGroup(queue + " time", size_time);
         }
         // END gst-shark
         else {
