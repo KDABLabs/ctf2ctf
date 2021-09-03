@@ -51,6 +51,7 @@ CliOptions parseCliOptions(int argc, char** argv)
                                      {"relative-timestamps"});
     args::Flag skipInstantEventsArg(parser, "skip-instant-events", "don't emit instant events (ph: i)",
                                     {"skip-instant-events"});
+    args::Flag ctxTidPid(parser, "ctx", "take PID and TID from context", {"ctx"});
     args::Positional<std::filesystem::path> pathArg(
         parser, "path", "The path to an LTTng trace folder, will be searched recursively for trace data");
     try {
@@ -82,5 +83,6 @@ CliOptions parseCliOptions(int argc, char** argv)
         args::get(printStatsArg),
         args::get(relativeTimestampsArg),
         args::get(skipInstantEventsArg),
+        args::get(ctxTidPid),
     };
 }

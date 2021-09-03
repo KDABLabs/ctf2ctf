@@ -1170,7 +1170,7 @@ private:
             {"Block I/O statistics", BLOCK_COUNTER_PID, false},
         };
         static_assert(std::size(groups) == static_cast<std::size_t>(CounterGroup::NUM_COUNTER_GROUP));
-        assert(counterGroup < NUM_COUNTER_GROUP);
+        assert(counterGroup < CounterGroup::NUM_COUNTER_GROUP);
         const auto groupIndex = static_cast<std::underlying_type_t<CounterGroup>>(counterGroup);
         auto& group = groups[groupIndex];
         if (!group.namePrinted) {
@@ -1335,15 +1335,32 @@ struct Event
 
         cpuId = rawCpuId.value();
 
-        tid = context->tid(cpuId);
-        pid = context->pid(tid);
+        if (context->options.ctxPidTid) {
+            const bt_definition* context_scope = bt_ctf_get_top_level_scope(event, BT_STREAM_EVENT_CONTEXT);
+            auto o_pid = get_int64(event, context_scope, "vpid");
+            if (o_pid) {
+                pid = o_pid.value();
+                context->setTid(cpuId, pid);
+            }
+            auto o_tid = get_int64(event, context_scope, "vtid");
+            int64_t r_tid = -1;
+            if (o_tid) {
+                r_tid = o_tid.value();
+                context->setPid(r_tid, pid);
+            }
+            tid = r_tid - pid;
+        } else {
+            tid = context->tid(cpuId);
+
+            pid = context->pid(tid);
+        }
 
         if (!event_fields_scope) {
             WARNING() << "failed to get event fields scope";
             return;
         }
 
-        auto rewriteName = [this](std::string& name, std::string_view needle, std::string_view replacement,
+        auto rewriteName = [](std::string& name, std::string_view needle, std::string_view replacement,
                                   bool atStart) {
             const auto pos = atStart ? 0 : name.find(needle);
 

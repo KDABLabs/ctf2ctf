@@ -43,6 +43,7 @@ struct CliOptions
     bool enableStatistics = false;
     bool relativeTimestamps = false;
     bool skipInstantEvents = false;
+    bool ctxPidTid = false;
 };
 
 CliOptions parseCliOptions(int argc, char** argv);
