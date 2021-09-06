@@ -26,6 +26,7 @@ and open the `trace.json.gz` file.
 - event metadata mapping:
   - page fault address to file
   - syscall `fd` to file
+  - support for vpid and vtid for UST traces (--ctx command line flag)
 - filter results by process name or process id
 - filter results by time
 
