@@ -34,6 +34,7 @@
 #include <cstdio>
 #include <stdio_ext.h>
 #include <csignal>
+#include <cstring>
 
 #include <algorithm>
 #include <filesystem>
