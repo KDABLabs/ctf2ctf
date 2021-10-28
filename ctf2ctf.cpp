@@ -1335,24 +1335,20 @@ struct Event
 
         cpuId = rawCpuId.value();
 
-        if (context->options.ctxPidTid) {
-            const bt_definition* context_scope = bt_ctf_get_top_level_scope(event, BT_STREAM_EVENT_CONTEXT);
-            auto o_pid = get_int64(event, context_scope, "vpid");
+        pid = context->pid(tid);
+        tid = context->tid(cpuId);
+        auto stream_event_context_scope = bt_ctf_get_top_level_scope(event, BT_STREAM_EVENT_CONTEXT);
+        if (stream_event_context_scope) {
+            auto o_pid = get_int64(event, stream_event_context_scope, "vpid");
             if (o_pid) {
                 pid = o_pid.value();
-                context->setTid(cpuId, pid);
             }
-            auto o_tid = get_int64(event, context_scope, "vtid");
-            int64_t r_tid = -1;
+            auto o_tid = get_int64(event, stream_event_context_scope, "vtid");
             if (o_tid) {
-                r_tid = o_tid.value();
-                context->setPid(r_tid, pid);
+                tid = o_tid.value();
+                context->setTid(cpuId, tid);
+                context->setPid(tid, pid);
             }
-            tid = r_tid - pid;
-        } else {
-            tid = context->tid(cpuId);
-
-            pid = context->pid(tid);
         }
 
         if (!event_fields_scope) {
