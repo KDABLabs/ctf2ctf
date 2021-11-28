@@ -1350,6 +1350,9 @@ struct Event
                 context->setTid(cpuId, tid);
                 context->setPid(tid, pid);
             }
+            if (context->options.relativeTid) {
+                tid -= pid;
+            }
         }
 
         if (!event_fields_scope) {
