@@ -28,7 +28,7 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_CURRENT_SOURCE_DIR}/cmake/mod
 
 find_package(Babeltrace REQUIRED)
 find_package(Qt5 COMPONENTS Gui)
-include_directories(${BABELTRACE_INCLUDE_DIR} ${CMAKE_CURRENT_BINARY_DIR} 3rdparty/)
+include_directories(${Babeltrace_INCLUDE_DIR} ${CMAKE_CURRENT_BINARY_DIR} 3rdparty/)
 
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 set(CMAKE_CXX_STANDARD 17)
