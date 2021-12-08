@@ -235,6 +235,14 @@ bool removeSuffix(std::string& name, std::string_view suffix)
     return true;
 }
 
+bool removePrefix(std::string& name, std::string_view prefix)
+{
+    if (!startsWith(name, prefix))
+        return false;
+    name.erase(0, prefix.size());
+    return true;
+}
+
 template<typename List, typename Needle>
 bool contains(List&& list, const Needle& needle)
 {
@@ -1375,10 +1383,12 @@ struct Event
 
         auto setType = [rewriteName](std::string& name) -> char {
             if (removeSuffix(name, "_entry") || rewriteName(name, "syscall_entry_", "syscall_", true)
-                || rewriteName(name, "_begin_", "_", false) || rewriteName(name, "_before_", "_", false)) {
+                || rewriteName(name, "_begin_", "_", false) || rewriteName(name, "_before_", "_", false)
+                || removePrefix(name, "begin_")) {
                 return 'B';
             } else if (removeSuffix(name, "_exit") || rewriteName(name, "syscall_exit_", "syscall_", true)
-                       || rewriteName(name, "_end_", "_", false) || rewriteName(name, "_after_", "_", false)) {
+                       || rewriteName(name, "_end_", "_", false) || rewriteName(name, "_after_", "_", false)
+                       || removePrefix(name, "end_")) {
                 return 'E';
             } else {
                 return 'i';
@@ -1511,12 +1521,12 @@ struct Event
                 }
                 context->reportedBrokenTracefString = true;
             } else {
-                auto msgView = std::string_view(msg);
-                std::string new_name(msgView.substr(0, msgView.find(' ')));
-                const auto fullMsg = new_name == msgView;
+                auto new_name = std::string(msg);
+                std::replace(new_name.begin(), new_name.end(), ' ', '_');
+                const auto new_type = setType(new_name);
                 if (!new_name.empty() && new_name.back() == ':')
                     new_name.resize(new_name.size() - 1);
-                const auto new_type = setType(new_name);
+                const auto fullMsg = new_name == std::string_view(msg);
                 if (new_type != 'i') {
                     name = new_name;
                     type = new_type;
