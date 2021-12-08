@@ -45,3 +45,6 @@ target_link_libraries(ctf2ctf ${Babeltrace_LIBRARIES} -lstdc++fs)
 if (Qt5Gui_FOUND)
     target_link_libraries(ctf2ctf Qt5::Gui)
 endif()
+
+include(GNUInstallDirs)
+install(TARGETS ctf2ctf RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
