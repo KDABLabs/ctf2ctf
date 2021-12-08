@@ -40,7 +40,7 @@ configure_file(config.h.in ${CMAKE_CURRENT_BINARY_DIR}/config.h @ONLY)
 configure_file(ctf2ctf-gz.sh.in ${CMAKE_CURRENT_BINARY_DIR}/ctf2ctf-gz @ONLY)
 
 add_executable(ctf2ctf ctf2ctf.cpp clioptions.cpp)
-target_link_libraries(ctf2ctf ${BABELTRACE_LIBRARIES} -lstdc++fs)
+target_link_libraries(ctf2ctf ${Babeltrace_LIBRARIES} -lstdc++fs)
 
 if (Qt5Gui_FOUND)
     target_link_libraries(ctf2ctf Qt5::Gui)
