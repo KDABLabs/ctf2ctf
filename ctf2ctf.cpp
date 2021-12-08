@@ -1501,15 +1501,19 @@ struct Event
             const auto sector = get_uint64(event, event_fields_scope, "sector").value();
             context->blockRqRequeue(dev, sector, timestamp);
         } else if (name == "lttng_ust_tracef:event") {
-            const auto msg = std::string_view(get_string(event, event_fields_scope, "msg").value());
-            if (!msg.data() && !context->reportedBrokenTracefString) {
-                WARNING() << "failed to read lttng_ust_tracef:event.msg\n"
-                          << "please build babeltrace with https://github.com/efficios/babeltrace/pull/98 applied to "
-                             "fix this";
+            const auto msg = get_string(event, event_fields_scope, "msg").value();
+            if (!msg) {
+                if (!context->reportedBrokenTracefString) {
+                    WARNING()
+                        << "failed to read lttng_ust_tracef:event.msg\n"
+                        << "please build babeltrace with https://github.com/efficios/babeltrace/pull/98 applied to "
+                           "fix this";
+                }
                 context->reportedBrokenTracefString = true;
             } else {
-                std::string new_name(msg.substr(0, msg.find(' ')));
-                const auto fullMsg = new_name == msg;
+                auto msgView = std::string_view(msg);
+                std::string new_name(msgView.substr(0, msgView.find(' ')));
+                const auto fullMsg = new_name == msgView;
                 if (!new_name.empty() && new_name.back() == ':')
                     new_name.resize(new_name.size() - 1);
                 const auto new_type = setType(new_name);
@@ -1705,10 +1709,12 @@ void addArg(const bt_ctf_event* event, const bt_declaration* decl, const bt_defi
     case CTF_TYPE_STRUCT:
     case CTF_TYPE_SEQUENCE: {
         if (isString && type == CTF_TYPE_SEQUENCE) {
-            formatter(field_name, bt_ctf_get_string(def));
+            auto str = bt_ctf_get_string(def);
+            formatter(field_name, str ? str : "");
             break;
         } else if (isString && type == CTF_TYPE_ARRAY) {
-            formatter(field_name, bt_ctf_get_char_array(def));
+            auto str = bt_ctf_get_char_array(def);
+            formatter(field_name, str ? str : "");
             break;
         }
         unsigned int numEntries = 0;
