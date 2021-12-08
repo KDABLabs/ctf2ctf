@@ -34,7 +34,7 @@ find_path(Babeltrace_LIBRARY_DIR
           NAMES libbabeltrace.so
           NAMES libbabeltrace-ctf.so
           PATHS ${Babeltrace_PATH_HINT}
-          PATH_SUFFIXES lib lib64
+          PATH_SUFFIXES lib lib64 lib/x86_64-linux-gnu
           DOC "The Babeltrace libraries")
 
 find_library(BABELTRACE NAMES babeltrace PATHS ${Babeltrace_LIBRARY_DIR})

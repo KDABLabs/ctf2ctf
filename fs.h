@@ -1,9 +1,9 @@
 /*
-  clioptions.h
+  fs.h
 
   This file is part of ctf2ctf, a converter from LTTng/CTF to Chromium's Common Trace Format.
 
-  Copyright (C) 2019 Klarälvdalens Datakonsult AB, a KDAB Group company, info@kdab.com
+  Copyright (C) 2021 Klarälvdalens Datakonsult AB, a KDAB Group company, info@kdab.com
   Author: Milian Wolff <milian.wolff@kdab.com>
 
   Licensees holding valid commercial KDAB ctf2ctf licenses may use this file in
@@ -27,24 +27,10 @@
 
 #pragma once
 
-#include "fs.h"
-
-#include <string>
-#include <vector>
-
-struct CliOptions
-{
-    std::string outputFile;
-    fs::path path;
-    std::vector<std::string> exclude;
-    std::vector<int64_t> pidWhitelist;
-    std::vector<std::string> processWhitelist;
-    int64_t minTime = 0;
-    int64_t maxTime = 0;
-    bool enableStatistics = false;
-    bool relativeTimestamps = false;
-    bool skipInstantEvents = false;
-    bool relativeTid = false;
-};
-
-CliOptions parseCliOptions(int argc, char** argv);
+#if __has_include(<filesystem>)
+#include <filesystem>
+namespace fs = std::filesystem;
+#else
+#include <experimental/filesystem>
+namespace fs = std::experimental::filesystem;
+#endif

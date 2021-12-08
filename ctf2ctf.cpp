@@ -37,7 +37,6 @@
 #include <cstring>
 
 #include <algorithm>
-#include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -50,6 +49,7 @@
 #include <variant>
 #include <vector>
 
+#include "fs.h"
 #include "clioptions.h"
 
 #include "config.h"
@@ -168,10 +168,10 @@ std::string rwbsToString(uint64_t rwbs)
 constexpr auto TIMESTAMP_PRECISION = std::numeric_limits<double>::max_digits10;
 
 template<typename Callback>
-void findMetadataFiles(const std::filesystem::path& path, Callback&& callback)
+void findMetadataFiles(const fs::path& path, Callback&& callback)
 {
-    for (const auto& entry : std::filesystem::recursive_directory_iterator(path)) {
-        if (entry.is_regular_file() && entry.path().filename() == "metadata")
+    for (const auto& entry : fs::recursive_directory_iterator(path)) {
+        if (fs::is_regular_file(entry.status()) && entry.path().filename() == "metadata")
             callback(entry.path().parent_path().c_str());
     }
 }

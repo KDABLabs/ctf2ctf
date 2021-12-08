@@ -53,7 +53,7 @@ CliOptions parseCliOptions(int argc, char** argv)
                                     {"skip-instant-events"});
     args::Flag relativeTid(parser, "rtid", "subtract pid from tid so that main threads have tid = 0 (only works if vpid and vtid properties present in the context)",
                                     {"rtid"});
-    args::Positional<std::filesystem::path> pathArg(
+    args::Positional<fs::path> pathArg(
         parser, "path", "The path to an LTTng trace folder, will be searched recursively for trace data");
     try {
         parser.ParseCLI(argc, argv);
@@ -66,7 +66,7 @@ CliOptions parseCliOptions(int argc, char** argv)
     }
 
     const auto path = args::get(pathArg);
-    if (!std::filesystem::exists(path)) {
+    if (!fs::exists(path)) {
         std::cerr << "path does not exist: " << path << std::endl;
         exit(1);
     }
