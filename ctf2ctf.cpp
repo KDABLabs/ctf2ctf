@@ -1344,8 +1344,8 @@ struct Event
 
         cpuId = rawCpuId.value();
 
-        pid = context->pid(tid);
         tid = context->tid(cpuId);
+        pid = context->pid(tid);
         auto stream_event_context_scope = bt_ctf_get_top_level_scope(event, BT_STREAM_EVENT_CONTEXT);
         if (stream_event_context_scope) {
             auto o_pid = get_int64(event, stream_event_context_scope, "vpid");
