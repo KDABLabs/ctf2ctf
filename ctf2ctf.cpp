@@ -797,11 +797,11 @@ struct Context
     {
         if (tid == pid) {
             bool whiteListedPid = contains(options.pidWhitelist, pid);
-            if (isFilteredByProcessName(name) && !whiteListedPid)
+            if (!whiteListedPid && isFilteredByProcessName(name))
                 return;
 
             if (!options.processWhitelist.empty() && !whiteListedPid)
-                options.pidWhitelist.push_back(pid); // add pid to filer to exclude events
+                options.pidWhitelist.push_back(pid); // add pid to filter to exclude events
         }
 
         if (isFilteredByPid(pid))
@@ -1018,7 +1018,9 @@ struct Context
 
     bool isFilteredByProcessName(std::string_view name) const
     {
-        return !isWhitelisted(options.processWhitelist, name);
+        return !options.processWhitelist.empty() && std::none_of(options.processWhitelist.begin(), options.processWhitelist.end(), [&name](const auto &process) {
+            return name.find(process) != std::string::npos;
+        });
     }
 
     bool isFilteredByTime(int64_t timestamp) const
