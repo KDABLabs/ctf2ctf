@@ -1434,8 +1434,16 @@ struct Event
             context->printName(tid, pid, filename, timestamp);
         } else if (name == "lttng_statedump_process_state") {
             const auto cpu = get_uint64(event, event_fields_scope, "cpu").value();
-            const auto vtid = get_int64(event, event_fields_scope, "vtid").value();
-            const auto vpid = get_int64(event, event_fields_scope, "vpid").value();
+            auto tid = get_int64(event, event_fields_scope, "vtid");
+            if (!tid)
+                tid = get_int64(event, event_fields_scope, "tid");
+
+            auto pid = get_int64(event, event_fields_scope, "vpid");
+            if (!pid)
+                pid = get_int64(event, event_fields_scope, "pid");
+
+            const auto vtid = tid.value();
+            const auto vpid = pid.value();
 
             context->setTid(cpu, vtid);
             context->setPid(vtid, vpid);
@@ -1452,10 +1460,12 @@ struct Event
             const auto diskname = get_string(event, event_fields_scope, "diskname").value();
             context->setBlockDeviceName(device, diskname);
         } else if (name == "lttng_statedump_file_descriptor") {
-            const auto pid = get_int64(event, event_fields_scope, "pid").value();
+            auto vpid = get_int64(event, event_fields_scope, "pid");
+            if (!vpid)
+                vpid = pid;
             const auto fd = get_int64(event, event_fields_scope, "fd").value();
             const auto filename = get_string(event, event_fields_scope, "filename").value();
-            context->setFdFilename(pid, fd, filename);
+            context->setFdFilename(vpid.value(), fd, filename);
         } else if (name == "lttng_ust_statedump:bin_info") {
             const auto baddr = get_uint64(event, event_fields_scope, "baddr").value();
             const auto memsz = get_uint64(event, event_fields_scope, "memsz").value();
