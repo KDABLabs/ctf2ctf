@@ -1057,6 +1057,13 @@ struct Context
 
         out << "\nEvent Category Stats:\n";
         printSortedStats(categoryStats);
+
+        out << "PID Memory Stats:\n";
+        std::vector<EventStats> pidStats;
+        for (const auto& p : pids) {
+            pidStats.push_back({std::to_string(p.first), p.second.maxAnonMmapped});
+        }
+        printSortedStats(pidStats);
     }
 
     int64_t generateTidForString(const std::string& string, int64_t timestamp, int64_t pid = -1)
@@ -1133,6 +1140,7 @@ private:
         else
             anonMmapped -= len;
 
+        pids[pid].maxAnonMmapped = std::max(anonMmapped, pids[pid].maxAnonMmapped);
         printCounterValue("anon mmapped", timestamp, pid, anonMmapped);
     }
     void count(std::string_view name, std::string_view category)
@@ -1262,6 +1270,7 @@ private:
         std::unordered_map<int64_t, std::string> fdToFilename;
         std::vector<MMap> mmaps;
         uint64_t anonMmapped = 0;
+        uint64_t maxAnonMmapped = 0;
         uint64_t pageFaults = 0;
         uint64_t blockIoBytesPending = 0;
     };
