@@ -793,6 +793,14 @@ struct Context
         printCounterValue("page faults", timestamp, pid, pageFaults);
     }
 
+    std::string& getTidName(int64_t id)
+    {
+        auto it = tids.find(id);
+        if (it == tids.end())
+            it = tids.insert(it, {id, {}});
+        return it->second.name;
+    }
+
     void printName(int64_t tid, int64_t pid, std::string_view name, int64_t timestamp)
     {
         if (tid == pid) {
@@ -807,19 +815,12 @@ struct Context
         if (isFilteredByPid(pid))
             return;
 
-        auto getName = [this](int64_t id) -> std::string& {
-            auto it = tids.find(id);
-            if (it == tids.end())
-                it = tids.insert(it, {id, {}});
-            return it->second.name;
-        };
-
         auto printName = [this, tid, pid, name, timestamp](const char* type) {
             printEvent(type, 'M', timestamp, pid, tid, {}, {{"name", name}});
         };
 
         if (pid != INVALID_TID) {
-            auto& pidName = getName(pid);
+            auto& pidName = getTidName(pid);
             if (pidName.empty() || (tid == pid && pidName != name)) {
                 if (pidName.empty()) {
                     printEvent("process_sort_index", 'M', timestamp, pid, pid, {}, {{"sort_index", pid}});
@@ -834,7 +835,7 @@ struct Context
             }
         }
         if (tid != INVALID_TID) {
-            auto& tidName = getName(tid);
+            auto& tidName = getTidName(tid);
             if (tidName != name) {
                 tidName = name;
                 printName("thread_name");
@@ -1037,7 +1038,7 @@ struct Context
         return options.skipInstantEvents && type == 'i';
     }
 
-    void printStats(std::ostream& out) const
+    void printStats(std::ostream& out)
     {
         if (!options.enableStatistics)
             return;
@@ -1061,7 +1062,7 @@ struct Context
         out << "PID Memory Stats:\n";
         std::vector<EventStats> pidStats;
         for (const auto& p : pids) {
-            pidStats.push_back({std::to_string(p.first), p.second.maxAnonMmapped});
+            pidStats.push_back({std::to_string(p.first) + " (" + getTidName(p.first) + ")", p.second.maxAnonMmapped});
         }
         printSortedStats(pidStats);
     }
