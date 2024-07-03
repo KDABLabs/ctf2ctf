@@ -1059,7 +1059,7 @@ struct Context
         out << "\nEvent Category Stats:\n";
         printSortedStats(categoryStats);
 
-        out << "PID Memory Stats:\n";
+        out << "\nPID Memory Stats:\n";
         std::vector<EventStats> pidStats;
         for (const auto& p : pids) {
             pidStats.push_back({std::to_string(p.first) + " (" + getTidName(p.first) + ")", p.second.maxAnonMmapped});
