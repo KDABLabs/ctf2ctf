@@ -27,7 +27,11 @@ endif()
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules)
 
 find_package(Babeltrace REQUIRED)
-find_package(Qt5 COMPONENTS Gui)
+find_package(QT NAMES Qt6 Qt5)
+if (QT_FOUND)
+    find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Gui REQUIRED)
+    set(QtGui_FOUND ON)
+endif()
 include_directories(${Babeltrace_INCLUDE_DIR} ${CMAKE_CURRENT_BINARY_DIR} 3rdparty/)
 
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
@@ -42,8 +46,8 @@ configure_file(ctf2ctf-gz.sh.in ${CMAKE_CURRENT_BINARY_DIR}/ctf2ctf-gz @ONLY)
 add_executable(ctf2ctf ctf2ctf.cpp clioptions.cpp)
 target_link_libraries(ctf2ctf ${Babeltrace_LIBRARIES} -lstdc++fs)
 
-if (Qt5Gui_FOUND)
-    target_link_libraries(ctf2ctf Qt5::Gui)
+if (QT_FOUND)
+    target_link_libraries(ctf2ctf Qt${QT_VERSION_MAJOR}::Gui)
 endif()
 
 include(GNUInstallDirs)

@@ -54,7 +54,7 @@
 
 #include "config.h"
 
-#if Qt5Gui_FOUND
+#if QtGui_FOUND
 #include <QEvent>
 #include <QMetaEnum>
 #include <QString>
@@ -1808,7 +1808,7 @@ struct Formatter
 
     void operator()(std::string_view field, int64_t value, int base)
     {
-#if Qt5Gui_FOUND
+#if QtGui_FOUND
         if (startsWith(event->category, "qt")) {
             auto isEventType = [this, field]() {
                 if (field != "type")
@@ -1897,7 +1897,7 @@ struct Formatter
     {
         if (type == CTF_TYPE_SEQUENCE && startsWith(event->category, "qt")) {
             std::string string;
-#if Qt5Gui_FOUND
+#if QtGui_FOUND
             QString utf16String;
 #endif
             for (unsigned i = 0; i < numEntries; ++i) {
@@ -1915,14 +1915,14 @@ struct Formatter
                 const auto signedness = bt_ctf_get_int_signedness(decl);
                 switch (signedness) {
                 case 0:
-#if Qt5Gui_FOUND
+#if QtGui_FOUND
                     utf16String.append(QChar(static_cast<char16_t>(bt_ctf_get_uint64(def))));
 #else
                     string.push_back(static_cast<char>(bt_ctf_get_uint64(def)));
 #endif
                     break;
                 case 1:
-#if Qt5Gui_FOUND
+#if QtGui_FOUND
                     utf16String.append(QChar(static_cast<char16_t>(bt_ctf_get_int64(def))));
 #else
                     string.push_back(static_cast<char>(bt_ctf_get_int64(def)));
@@ -1933,7 +1933,7 @@ struct Formatter
                     break;
                 }
             }
-#if Qt5Gui_FOUND
+#if QtGui_FOUND
             string = utf16String.toStdString();
 #endif
             (*this)(field, string);

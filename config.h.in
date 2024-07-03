@@ -25,4 +25,4 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#cmakedefine01 Qt5Gui_FOUND
+#cmakedefine01 QtGui_FOUND
