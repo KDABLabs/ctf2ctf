@@ -1062,6 +1062,9 @@ struct Context
         out << "\nPID Memory Stats:\n";
         std::vector<EventStats> pidStats;
         for (const auto& p : pids) {
+            if (!p.second.maxAnonMmapped) {
+                continue;
+            }
             pidStats.push_back({std::to_string(p.first) + " (" + getTidName(p.first) + ")", p.second.maxAnonMmapped});
         }
         printSortedStats(pidStats);
