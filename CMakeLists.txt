@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.0)
+cmake_minimum_required(VERSION 3.5)
 project(ctf2ctf VERSION 0.1)
 
 function(check_submodule NAME SUBMODULE_PATH)
